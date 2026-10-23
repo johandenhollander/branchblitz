@@ -57,6 +57,8 @@ scripts/demo-repo.sh && BB_DEMO=/tmp/bbdemo/work cargo test render -- --ignored 
 Look at the rendered PNGs for any UI change.
 
 Before a release: `scripts/perf.sh` (writes `perf/<version>.json`, compares with the previous one; same machine).
+Timings drift between sessions (power state): check a flagged change side by side, the previous version's
+commit in a worktree (`git worktree add /tmp/bbbase <commit>`, `BB_PERF=/tmp/bbperf/repo cargo test --release perf_baseline -- --ignored`).
 
 ## See the app (MCP)
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Measures performance for a release: writes perf/<version>.json and compares it with the
 # previous measurement (changes over 10% and 1 ms/MB are marked). Run from the repository root, on the same
-# machine each time (the results include which one). Takes a few minutes (release builds).
+# machine each time (the results include which one), with little else running. Takes a few
+# minutes (release builds, three runs).
 set -euo pipefail
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 mkdir -p perf
@@ -10,7 +11,16 @@ tmp=$(mktemp)
 
 scripts/perf-repo.sh /tmp/bbperf >/dev/null
 cargo build --profile dist --locked --quiet
-BB_PERF=/tmp/bbperf/repo BB_PERF_OUT="$tmp" cargo test --release --quiet perf_baseline -- --ignored >/dev/null
+# Three runs, the median of each metric: one run varies by about 10%.
+for run in 1 2 3; do
+    BB_PERF=/tmp/bbperf/repo BB_PERF_OUT="$tmp.$run" cargo test --release --quiet perf_baseline -- --ignored >/dev/null
+done
+python3 - "$tmp" <<'EOF'
+import json, statistics, sys
+runs = [json.load(open(f"{sys.argv[1]}.{n}")) for n in (1, 2, 3)]
+json.dump({k: statistics.median(r[k] for r in runs) for k in runs[0]}, open(sys.argv[1], "w"))
+EOF
+rm -f "$tmp".[123]
 
 cpu=$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2- | sed 's/^ *//' || uname -m)
 python3 - "$tmp" "$out" "$version" "$cpu" "$(rustc --version)" "$(stat -c %s target/dist/branchblitz)" <<'EOF'
