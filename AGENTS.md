@@ -73,6 +73,7 @@ into a test in `mcp::tests` or `render_tests`. Never point it at the user's real
 - Don't add UI that needs a real window (dialogs, spawning apps) without a `headless` fallback.
 - Don't push, merge or cherry-pick from a local `archive/*` branch → pre-publication history with names that must not go public; work on `main` only (brain: [[publishing]]).
 - Don't commit before the tests pass → gate the commit on the test result, not on running them.
+- Don't let a test or the headless app write outside temp dirs → defaults like `~/Projects` must become the temp dir when `headless`; in MCP tests don't rely on Ctrl+A to replace a field's text (it appended to the default and a test clone landed in `~/Projects`), set the value through a test hook.
 
 ## Language & git
 

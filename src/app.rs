@@ -62,6 +62,8 @@ pub struct Settings {
     pub check_updates: bool,
     pub updates_checked: i64,
     pub latest_version: Option<String>,
+    /// Where the last clone went (its parent folder): the next one starts there.
+    pub clone_parent: Option<PathBuf>,
     /// What the Pull button runs, per repository path.
     pub pull_modes: HashMap<String, git::PullMode>,
     /// Repositories where the Pull button fetches instead (its default is "Fetch All").
@@ -184,6 +186,7 @@ impl Default for Settings {
             check_updates: true,
             updates_checked: 0,
             latest_version: None,
+            clone_parent: None,
             pull_modes: HashMap::new(),
             fetch_default: Default::default(),
             columns: HashMap::new(),
@@ -229,6 +232,10 @@ enum MsgKind {
     Agent(crate::agent::Event),
     /// The newest release on GitHub, or why it couldn't be asked.
     Latest(Result<Option<String>, String>),
+    /// A clone finished (its folder), or failed.
+    Cloned(Result<PathBuf, String>),
+    /// The folder chosen to clone into.
+    PickedCloneParent(PathBuf),
 }
 
 /// What the agent may do without asking the user.
@@ -309,6 +316,14 @@ enum Modal {
         body: String,
     },
     Settings,
+    /// Clone a repository: URL, the folder to clone into, running, git's error.
+    Clone {
+        url: String,
+        parent: String,
+        busy: bool,
+        error: Option<String>,
+        focus: bool,
+    },
 }
 
 pub struct RepoTab {
@@ -651,6 +666,11 @@ impl BranchBlitz {
     }
 
     #[cfg(test)]
+    pub(crate) fn set_clone_parent(&mut self, p: PathBuf) {
+        self.settings.clone_parent = Some(p);
+    }
+
+    #[cfg(test)]
     pub(crate) fn set_latest_version(&mut self, v: &str) {
         self.settings.latest_version = Some(v.into());
         self.settings.updates_checked = 1;
@@ -807,6 +827,84 @@ impl BranchBlitz {
         }
     }
 
+    /// Opens the clone dialog, starting in the folder of the last clone (else ~/Projects or ~;
+    /// without a window, the temp dir: tests and the MCP server stay out of the user's folders).
+    fn open_clone(&mut self) {
+        let home = if self.headless {
+            std::env::temp_dir()
+        } else {
+            std::env::home_dir().unwrap_or_default()
+        };
+        let parent = self
+            .settings
+            .clone_parent
+            .clone()
+            .or_else(|| Some(home.join("Projects")).filter(|p| p.is_dir()))
+            .unwrap_or(home);
+        self.modal = Some(Modal::Clone {
+            url: String::new(),
+            parent: parent.display().to_string(),
+            busy: false,
+            error: None,
+            focus: true,
+        });
+    }
+
+    /// Clones in the background; the answer comes as `MsgKind::Cloned`.
+    fn start_clone(&mut self, url: String, dest: PathBuf) {
+        crate::log::write("INFO", &format!("cloning {url} into {}", dest.display()));
+        let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
+        std::thread::spawn(move || {
+            let r = git::clone_repo(&url, &dest);
+            let _ = tx.send(Msg {
+                tab: 0,
+                kind: MsgKind::Cloned(r),
+            });
+            ctx.request_repaint();
+        });
+    }
+
+    /// A clone finished: open it (and remember where it went), or show git's error.
+    fn cloned(&mut self, r: Result<PathBuf, String>) {
+        match r {
+            Ok(path) => {
+                self.settings.clone_parent = path.parent().map(Path::to_path_buf);
+                if matches!(self.modal, Some(Modal::Clone { .. })) {
+                    self.modal = None;
+                }
+                self.open_repo(&path, true);
+            }
+            Err(e) => {
+                crate::log::write("ERROR", &format!("clone failed: {e}"));
+                match &mut self.modal {
+                    Some(Modal::Clone { busy, error, .. }) => {
+                        *busy = false;
+                        *error = Some(e);
+                    }
+                    _ => self.status_line = Some((false, format!("Clone failed: {e}"))),
+                }
+            }
+        }
+    }
+
+    /// The folder picker for the clone dialog.
+    fn pick_clone_parent(&mut self) {
+        if self.headless {
+            self.status_line = Some((false, "No folder dialog in automation mode".into()));
+            return;
+        }
+        let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
+        std::thread::spawn(move || {
+            if let Some(p) = rfd::FileDialog::new().set_title("Clone into").pick_folder() {
+                let _ = tx.send(Msg {
+                    tab: 0,
+                    kind: MsgKind::PickedCloneParent(p),
+                });
+                ctx.request_repaint();
+            }
+        });
+    }
+
     fn pick_folder(&mut self) {
         if self.headless {
             self.status_line = Some((
@@ -835,6 +933,16 @@ impl BranchBlitz {
             if let MsgKind::PickedFolder(p) = &msg.kind {
                 let p = p.clone();
                 self.open_repo(&p, true);
+                continue;
+            }
+            if let MsgKind::Cloned(r) = &msg.kind {
+                self.cloned(r.clone());
+                continue;
+            }
+            if let MsgKind::PickedCloneParent(p) = &msg.kind {
+                if let Some(Modal::Clone { parent, .. }) = &mut self.modal {
+                    *parent = p.display().to_string();
+                }
                 continue;
             }
             if let MsgKind::Latest(r) = &msg.kind {
@@ -1051,7 +1159,10 @@ impl BranchBlitz {
                     }
                     self.tabs[i].agent.apply(event)
                 }
-                MsgKind::PickedFolder(_) | MsgKind::Latest(_) => unreachable!(),
+                MsgKind::PickedFolder(_)
+                | MsgKind::Latest(_)
+                | MsgKind::Cloned(_)
+                | MsgKind::PickedCloneParent(_) => unreachable!(),
             }
         }
     }
@@ -1736,6 +1847,15 @@ impl BranchBlitz {
             {
                 self.pick_folder();
             }
+            ui.add_space(8.0);
+            if ds::Button::new("Clone repository…")
+                .icon(icons::DOWNLOAD)
+                .size(egui::vec2(240.0, 34.0))
+                .show(ui, pal)
+                .clicked()
+            {
+                self.open_clone();
+            }
             ui.add_space(12.0);
             ui.allocate_ui_with_layout(
                 egui::vec2(w, ds::CONTROL_MD),
@@ -1880,6 +2000,8 @@ impl BranchBlitz {
         let Some(modal) = &mut self.modal else { return };
         let mut close = false;
         let mut submit: Option<Op> = None;
+        let mut clone: Option<(String, PathBuf)> = None;
+        let mut browse_parent = false;
         let target_tab = match modal {
             Modal::Input { tab, .. } => self.tabs.iter().position(|t| t.id == *tab),
             _ => None,
@@ -2006,12 +2128,128 @@ impl BranchBlitz {
                             }
                         });
                     }
+                    Modal::Clone {
+                        url,
+                        parent,
+                        busy,
+                        error,
+                        focus,
+                    } => {
+                        ui.label(ds::title("Clone repository").color(pal.text));
+                        let field =
+                            |ui: &mut egui::Ui, text: &mut String, hint: &str, label: &str| {
+                                let r = ui.add_sized(
+                                    egui::vec2(ui.available_width(), ds::CONTROL_MD),
+                                    egui::TextEdit::singleline(text)
+                                        .hint_text(hint)
+                                        .align(egui::Align2::LEFT_CENTER),
+                                );
+                                r.widget_info(|| {
+                                    egui::WidgetInfo::labeled(egui::Role::TextInput, true, label)
+                                });
+                                r
+                            };
+                        let u = field(
+                            ui,
+                            url,
+                            "https://github.com/owner/repo.git or git@host:owner/repo",
+                            "Repository URL",
+                        );
+                        if std::mem::take(focus) {
+                            u.request_focus();
+                        }
+                        ui.horizontal(|ui| {
+                            let browse = 84.0;
+                            ui.allocate_ui(
+                                egui::vec2(ui.available_width() - browse - 8.0, ds::CONTROL_MD),
+                                |ui| field(ui, parent, "Folder to clone into", "Clone into folder"),
+                            );
+                            if ds::Button::new("Browse…")
+                                .size(egui::vec2(browse, ds::CONTROL_MD))
+                                .enabled(!*busy)
+                                .show(ui, &pal)
+                                .clicked()
+                            {
+                                browse_parent = true;
+                            }
+                        });
+                        let name = git::repo_name_from_url(url);
+                        let dest = name.as_ref().map(|n| expand_home(parent.trim()).join(n));
+                        let exists = dest
+                            .as_ref()
+                            .is_some_and(|d| d.read_dir().is_ok_and(|mut e| e.next().is_some()));
+                        let (note, problem) = match (&dest, url.trim().is_empty()) {
+                            (_, true) => (String::new(), true),
+                            (None, false) => ("Not a repository URL".to_string(), true),
+                            (Some(d), _) if exists => {
+                                (format!("{} already exists", d.display()), true)
+                            }
+                            (Some(d), _) => (format!("Clones into {}", d.display()), false),
+                        };
+                        if !note.is_empty() {
+                            ui.label(RichText::new(note).size(12.0).color(if problem {
+                                pal.danger
+                            } else {
+                                pal.text_muted
+                            }));
+                        }
+                        if *busy {
+                            ui.horizontal(|ui| {
+                                ui.add(egui::Spinner::new().size(14.0));
+                                ui.label(
+                                    RichText::new("Cloning… large repositories take a while")
+                                        .color(pal.text_muted),
+                                );
+                            });
+                        }
+                        if let Some(e) = error.as_ref() {
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(e.as_str())
+                                        .monospace()
+                                        .size(12.0)
+                                        .color(pal.danger),
+                                )
+                                .wrap(),
+                            );
+                        }
+                        actions(ui, &mut |ui| {
+                            let ok = !problem && !*busy;
+                            if (ds::Button::new("Clone")
+                                .primary()
+                                .enabled(ok)
+                                .show(ui, &pal)
+                                .clicked()
+                                || (ok && ui.input(|i| i.key_pressed(egui::Key::Enter))))
+                                && let Some(d) = dest.clone()
+                            {
+                                *busy = true;
+                                *error = None;
+                                clone = Some((url.trim().to_string(), d));
+                            }
+                            if ds::Button::new("Cancel")
+                                .quiet()
+                                .enabled(!*busy)
+                                .show(ui, &pal)
+                                .clicked()
+                            {
+                                close = true;
+                            }
+                        });
+                    }
                     // Drawn by `show_settings`.
                     Modal::Settings => {}
                 }
             });
-        if resp.should_close() {
+        // A running clone keeps its dialog (clicking outside doesn't hide the result).
+        if resp.should_close() && !matches!(self.modal, Some(Modal::Clone { busy: true, .. })) {
             close = true;
+        }
+        if let Some((url, dest)) = clone {
+            self.start_clone(url, dest);
+        }
+        if browse_parent {
+            self.pick_clone_parent();
         }
         if let Some(op) = submit {
             close = true;
@@ -2275,8 +2513,9 @@ impl BranchBlitz {
 
     /// Whether background work is still pending: git jobs, loads, commit details or a diff.
     pub(crate) fn is_busy(&self) -> bool {
-        self.tabs.iter().any(|t| {
-            !t.running.is_empty()
+        matches!(self.modal, Some(Modal::Clone { busy: true, .. }))
+            || self.tabs.iter().any(|t| {
+                !t.running.is_empty()
                 || t.loads_done < t.loads_requested
                 || t.tags_pending
                 || (matches!(t.selected, Selection::Commit(_))
@@ -2285,7 +2524,7 @@ impl BranchBlitz {
                 || matches!(t.diff, Some((_, None)))
                 // An agent answering. (The agent's own tool calls wait with `tab_busy` instead.)
                 || t.agent.busy()
-        })
+            })
     }
 
     /// One-line summary for tool results.
@@ -2436,6 +2675,10 @@ impl BranchBlitz {
                 match m {
                     Modal::Error { body, .. } => v["body"] = json!(body),
                     Modal::Input { value, .. } => v["value"] = json!(value),
+                    Modal::Clone { error, busy, .. } => {
+                        v["busy"] = json!(busy);
+                        v["error"] = json!(error);
+                    }
                     Modal::Settings => {}
                 }
                 v
@@ -2457,6 +2700,7 @@ fn modal_title(m: &Modal) -> String {
             InputKind::Rename { old } => format!("Rename {old}"),
         },
         Modal::Settings => "Settings".into(),
+        Modal::Clone { .. } => "Clone repository".into(),
     }
 }
 

@@ -2098,6 +2098,78 @@ mod tests {
         assert!(!w.contains("Update: v"), "{w}");
     }
 
+    /// Clone from the welcome screen: the clone opens as a tab; a failed clone shows git's error
+    /// in the dialog.
+    #[test]
+    fn clone_from_the_welcome_screen() {
+        let mut s = Server::default();
+        let (_, out) = call(&mut s, "demo_repo", json!({}));
+        let work = out
+            .split(" at ")
+            .nth(1)
+            .unwrap()
+            .split(" (remote")
+            .next()
+            .unwrap()
+            .to_string();
+        let demo = Path::new(&work).parent().unwrap().to_path_buf();
+        let origin = demo.join("origin.git").display().to_string();
+        // The dialog starts in this folder (set directly: typing over a field's text is unreliable).
+        s.session
+            .as_mut()
+            .unwrap()
+            .state_mut()
+            .set_clone_parent(demo.join("clones"));
+        call(&mut s, "click", json!({"label": "Open repository"}));
+        let (err, out) = call(&mut s, "click", json!({"label": "Clone repository…"}));
+        assert!(!err, "{out}");
+        call(
+            &mut s,
+            "type_text",
+            json!({"label": "Repository URL", "text": origin}),
+        );
+        let want = demo.join("clones").join("origin").display().to_string();
+        let (_, w) = call(&mut s, "widgets", json!({"label": "Clones into"}));
+        assert!(w.contains(&want), "{w}");
+        let shot = s.call("screenshot", &json!({}));
+        if std::env::var_os("BB_SAVE_SHOTS").is_some()
+            && let Some(d) = shot["content"][0]["data"].as_str()
+        {
+            let png = base64::engine::general_purpose::STANDARD.decode(d).unwrap();
+            std::fs::write(std::env::temp_dir().join("bb-clone.png"), png).unwrap();
+        }
+        call(&mut s, "click", json!({"label": "Clone", "role": "Button"}));
+        call(&mut s, "wait_idle", json!({}));
+        let st: Value =
+            serde_json::from_str(&call(&mut s, "state", json!({"commits": 0})).1).unwrap();
+        let tabs = st["tabs"].as_array().unwrap();
+        assert_eq!(tabs.len(), 2, "{st:#}");
+        assert_eq!(tabs[1]["path"].as_str(), Some(want.as_str()), "{st:#}");
+        assert!(st["dialog"].is_null(), "{st:#}");
+
+        // Cloning what isn't a repository: the dialog stays with git's message.
+        call(&mut s, "click", json!({"label": "Open repository"}));
+        call(&mut s, "click", json!({"label": "Clone repository…"}));
+        let missing = demo.join("no-such-repo").display().to_string();
+        call(
+            &mut s,
+            "type_text",
+            json!({"label": "Repository URL", "text": missing}),
+        );
+        call(&mut s, "click", json!({"label": "Clone", "role": "Button"}));
+        call(&mut s, "wait_idle", json!({}));
+        let st: Value =
+            serde_json::from_str(&call(&mut s, "state", json!({"commits": 0})).1).unwrap();
+        assert_eq!(st["dialog"]["title"], "Clone repository", "{st:#}");
+        assert!(
+            st["dialog"]["error"]
+                .as_str()
+                .is_some_and(|e| !e.is_empty()),
+            "{st:#}"
+        );
+        assert!(!demo.join("clones").join("no-such-repo").exists());
+    }
+
     /// The checked out branch cannot be deleted; its menu says why, other branches delete.
     #[test]
     fn delete_branch_from_its_menu() {

@@ -24,6 +24,7 @@ It has an AI agent built in that can operate the app for you, and you see every 
   "theirs" swap.
 - **Worktrees**: listed in the sidebar; switch, open in a new tab, remove (with the branch), lock. Checking out
   a branch that another worktree has shows that worktree instead.
+- **Clone** a repository from a URL (the welcome screen, or `+` in the tab bar); it opens as a tab.
 - **Tabs** for multiple repositories, restored on start.
 - **Themes**: light, dark or the system's, several accents, adjustable contrast and fonts. On
   [Omarchy](https://omarchy.org) the "Omarchy" theme uses the desktop's colours and follows when you switch.

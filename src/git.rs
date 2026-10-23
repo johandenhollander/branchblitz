@@ -112,6 +112,42 @@ pub fn version() -> Result<String, String> {
     git(&std::env::temp_dir(), &["--version"]).map(|s| s.trim().to_string())
 }
 
+/// Cloning a large repository takes longer than other network operations.
+const CLONE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// The folder name git would give a clone of `url`: `…/team/app.git` or `host:team/app` → `app`.
+pub fn repo_name_from_url(url: &str) -> Option<String> {
+    let last = url
+        .trim()
+        .trim_end_matches('/')
+        .rsplit(['/', ':', '\\'])
+        .next()?;
+    let name = last.strip_suffix(".git").unwrap_or(last);
+    (!name.is_empty() && name != "." && name != ".." && !name.starts_with('-'))
+        .then(|| name.to_string())
+}
+
+/// `git clone <url> <dest>`; `dest` must not exist yet (or be an empty folder).
+pub fn clone_repo(url: &str, dest: &Path) -> Result<PathBuf, String> {
+    let url = url.trim();
+    if url.is_empty() || url.starts_with('-') {
+        return Err(format!("Not a repository URL: {url}"));
+    }
+    if dest.read_dir().is_ok_and(|mut d| d.next().is_some()) || dest.is_file() {
+        return Err(format!("{} already exists", dest.display()));
+    }
+    let parent = dest.parent().ok_or("No folder to clone into")?;
+    std::fs::create_dir_all(parent)
+        .map_err(|e| format!("Cannot create {}: {e}", parent.display()))?;
+    let dest_arg = dest.to_str().ok_or("The folder name is not valid text")?;
+    result(output_timeout(
+        parent,
+        &["clone", "--", url, dest_arg],
+        CLONE_TIMEOUT,
+    )?)?;
+    Ok(dest.to_path_buf())
+}
+
 /// The newest release (`vX.Y.Z` tag) of the repository at `url`, e.g. `0.2.0`.
 pub fn latest_release(url: &str) -> Result<Option<String>, String> {
     let out = git_network(
@@ -1541,6 +1577,38 @@ mod tests {
     fn latest_release_on_github() {
         let v = latest_release(crate::REPO_URL).unwrap();
         assert!(v.as_deref().and_then(version_key).is_some(), "{v:?}");
+    }
+
+    #[test]
+    fn clones_into_a_new_folder() {
+        assert_eq!(
+            repo_name_from_url("https://github.com/a/b.git").as_deref(),
+            Some("b")
+        );
+        assert_eq!(
+            repo_name_from_url("git@host:team/app").as_deref(),
+            Some("app")
+        );
+        assert_eq!(
+            repo_name_from_url("/srv/repos/thing/").as_deref(),
+            Some("thing")
+        );
+        assert_eq!(repo_name_from_url("https://host/"), Some("host".into()));
+        assert_eq!(repo_name_from_url("--upload-pack=x"), None);
+        let src = repo("clone-src");
+        let parent = src.with_extension("clones");
+        let _ = std::fs::remove_dir_all(&parent);
+        let dest = parent.join("copy");
+        let got = clone_repo(src.to_str().unwrap(), &dest).unwrap();
+        assert!(got.join(".git").exists() && got.join("a.txt").exists());
+        assert!(
+            clone_repo(src.to_str().unwrap(), &dest)
+                .unwrap_err()
+                .contains("already exists")
+        );
+        assert!(clone_repo("--upload-pack=touch x", &parent.join("evil")).is_err());
+        assert!(clone_repo("/nonexistent/repo", &parent.join("none")).is_err());
+        let _ = std::fs::remove_dir_all(&parent);
     }
 
     #[test]
