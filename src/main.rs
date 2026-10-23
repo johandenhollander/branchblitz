@@ -1,3 +1,6 @@
+// Windows: a GUI program, without a console window next to it.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod agent;
 mod app;
 mod color_scheme;
@@ -91,10 +94,17 @@ fn hide_discrete_vulkan() {
     }
 }
 
-/// Gives a program started by the app the user's environment (without `hide_discrete_vulkan`).
+/// Prepares a program started by the app: the user's environment (without
+/// `hide_discrete_vulkan`), and on Windows no console window flashing up for it.
 pub fn child_env(cmd: &mut std::process::Command) -> &mut std::process::Command {
     if HID_DISCRETE_VULKAN.load(std::sync::atomic::Ordering::Relaxed) {
         cmd.env_remove(VK_DISABLE);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
     }
     cmd
 }

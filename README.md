@@ -34,7 +34,22 @@ use an SSH agent or a credential helper.
 
 ## Install
 
-Requires [Rust](https://rustup.rs) 1.95 or newer and `git`.
+Download the package for your system from the [latest release](https://github.com/johandenhollander/branchblitz/releases/latest)
+(about 7 to 10 MB). BranchBlitz needs `git` installed.
+
+| System | Package | How |
+|---|---|---|
+| Debian, Ubuntu | `branchblitz_<version>_amd64.deb` / `_arm64.deb` | `sudo apt install ./branchblitz_*.deb` |
+| Any Linux | `branchblitz-<version>-<arch>.AppImage` | `chmod +x` it and run it |
+| Any Linux | `branchblitz-<version>-linux-<arch>.tar.gz` | unpack, run `./install.sh` (installs to `~/.local`) |
+| macOS | `BranchBlitz-<version>-macos-<arch>.zip` | unzip, move BranchBlitz.app to Applications |
+| Windows | `branchblitz-<version>-windows-x86_64.zip` | unzip, run `branchblitz.exe` |
+
+The macOS and Windows builds are not signed. macOS: the first time, right-click BranchBlitz.app and choose
+Open (or run `xattr -dr com.apple.quarantine BranchBlitz.app`). Windows: SmartScreen may ask; choose
+"More info", "Run anyway". `SHA256SUMS` in the release lists the checksums.
+
+From source (Rust 1.95 or newer):
 
 ```sh
 cargo install --git https://github.com/johandenhollander/branchblitz
@@ -120,6 +135,9 @@ scripts/demo-repo.sh && BB_DEMO=/tmp/bbdemo/work cargo test render -- --ignored 
 ```
 
 `scripts/readme-screenshot.sh` renders `docs/screenshot.png` (needs ImageMagick).
+Release packages: `scripts/package-linux.sh` (.tar.gz, .deb via `cargo deb`, AppImage) and
+`scripts/package-macos.sh <target>` write to `dist/`; `.github/workflows/release.yml` runs them for a `v*` tag
+and creates a draft release.
 `scripts/demo-repo.sh [dir]` builds a throwaway repository with a remote, branches, merges, a tag and
 uncommitted changes (default `/tmp/bbdemo`). The render tests drive the real UI against it (the merge test
 **merges `origin/develop` into the checked out branch**, so only point it at a throwaway repository).

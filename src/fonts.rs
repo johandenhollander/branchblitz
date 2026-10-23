@@ -31,7 +31,7 @@ pub fn families() -> &'static (Vec<String>, Vec<String>) {
 }
 
 fn run(args: &[&str]) -> String {
-    Command::new(args[0])
+    crate::child_env(&mut Command::new(args[0]))
         .args(&args[1..])
         .stdin(Stdio::null())
         .stderr(Stdio::null())

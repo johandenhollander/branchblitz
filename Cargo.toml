@@ -23,3 +23,39 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 base64 = "0.22"
 # Desktop light/dark preference from the XDG portal (already in the tree via accesskit).
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+
+# Release packages (scripts/package-*.sh, .github/workflows/release.yml): smaller and a bit faster,
+# at the cost of a slower build. Normal builds keep the plain release profile.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+strip = true
+
+# `cargo deb --profile dist`: Debian/Ubuntu package with the desktop entry and icons.
+[package.metadata.deb]
+maintainer = "Johan den Hollander <17511931+johandenhollander@users.noreply.github.com>"
+copyright = "2026, Johan den Hollander"
+license-file = ["LICENSE-MIT", "0"]
+extended-description = """\
+A fast desktop git client that shows every local branch, remote branch and tag in the commit \
+graph and merges them in two clicks, resolves conflicts per block and has an AI agent built in."""
+section = "devel"
+priority = "optional"
+depends = "$auto, git"
+assets = [
+    ["target/dist/branchblitz", "usr/bin/", "755"],
+    ["branchblitz.desktop", "usr/share/applications/", "644"],
+    ["assets/icons/branchblitz.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+    ["assets/icons/branchblitz-16.png", "usr/share/icons/hicolor/16x16/apps/branchblitz.png", "644"],
+    ["assets/icons/branchblitz-24.png", "usr/share/icons/hicolor/24x24/apps/branchblitz.png", "644"],
+    ["assets/icons/branchblitz-32.png", "usr/share/icons/hicolor/32x32/apps/branchblitz.png", "644"],
+    ["assets/icons/branchblitz-48.png", "usr/share/icons/hicolor/48x48/apps/branchblitz.png", "644"],
+    ["assets/icons/branchblitz-64.png", "usr/share/icons/hicolor/64x64/apps/branchblitz.png", "644"],
+    ["assets/icons/branchblitz-128.png", "usr/share/icons/hicolor/128x128/apps/branchblitz.png", "644"],
+    ["assets/icons/branchblitz-256.png", "usr/share/icons/hicolor/256x256/apps/branchblitz.png", "644"],
+    ["assets/icons/branchblitz-512.png", "usr/share/icons/hicolor/512x512/apps/branchblitz.png", "644"],
+    ["README.md", "usr/share/doc/branchblitz/", "644"],
+    ["LICENSE-APACHE", "usr/share/doc/branchblitz/", "644"],
+]
+
