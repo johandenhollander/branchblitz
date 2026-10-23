@@ -351,6 +351,10 @@ pub struct RepoTab {
     pub details: Option<CommitDetails>,
     pub details_error: Option<String>,
     pub diff: Option<(DiffTarget, Option<Result<String, String>>)>,
+    /// Lines chosen in the diff (indices in its parsed lines) to stage or unstage, and the
+    /// line a Shift-click extends from.
+    pub diff_selection: std::collections::BTreeSet<usize>,
+    pub diff_anchor: Option<usize>,
     diff_gen: u64,
     pub filter: String,
     pub find: Option<Find>,
@@ -614,6 +618,8 @@ impl BranchBlitz {
             diff_gen: 0,
             filter: String::new(),
             find: None,
+            diff_selection: Default::default(),
+            diff_anchor: None,
             agent: Default::default(),
             conflict_choices: Vec::new(),
             conflict_for: 0,
@@ -1159,6 +1165,11 @@ impl BranchBlitz {
                         && *t == target
                         && generation == tab.diff_gen
                     {
+                        // A changed diff makes the chosen line numbers meaningless.
+                        if content.as_ref() != Some(&r) {
+                            tab.diff_selection.clear();
+                            tab.diff_anchor = None;
+                        }
                         *content = Some(r);
                     }
                 }
@@ -1214,6 +1225,8 @@ impl BranchBlitz {
                     }
                 }
                 Action::ShowDiff(target) => {
+                    self.tabs[i].diff_selection.clear();
+                    self.tabs[i].diff_anchor = None;
                     self.tabs[i].conflict_choices.clear();
                     self.tabs[i].diff = Some((target.clone(), None));
                     self.request_diff(i, target);

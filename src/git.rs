@@ -112,6 +112,67 @@ pub fn version() -> Result<String, String> {
     git(&std::env::temp_dir(), &["--version"]).map(|s| s.trim().to_string())
 }
 
+/// Part of a one-file `git diff` as a patch for `git apply --cached --recount`: the changed
+/// lines for which `chosen(hunk, line)` holds (`hunk` 0-based, `line` the index in that hunk's
+/// body). Staging (a worktree diff): an unchosen removal stays as context and an unchosen addition
+/// is left out. Unstaging (a `--cached` diff, applied with `-R`): the other way round. Hunks
+/// without a chosen change are left out; `None` when nothing is left.
+pub fn partial_patch(
+    diff: &str,
+    chosen: impl Fn(usize, usize) -> bool,
+    unstage: bool,
+) -> Option<String> {
+    let all: Vec<&str> = diff.split_inclusive('\n').collect();
+    let first_hunk = all.iter().position(|l| l.starts_with("@@"))?;
+    let header: String = all[..first_hunk].concat();
+    if !header.contains("\n--- ") && !header.starts_with("--- ") {
+        return None;
+    }
+    let starts: Vec<usize> = (first_hunk..all.len())
+        .filter(|&i| all[i].starts_with("@@"))
+        .collect();
+    let (drop, as_context) = if unstage { ('-', '+') } else { ('+', '-') };
+    let mut patch = header;
+    let mut any = false;
+    for (h, &start) in starts.iter().enumerate() {
+        let end = starts.get(h + 1).copied().unwrap_or(all.len());
+        let mut body = String::new();
+        let mut changes = 0;
+        // Whether the last line was kept: a "\ No newline" note goes with it.
+        let mut kept = true;
+        for (i, line) in all[start + 1..end].iter().enumerate() {
+            match line.chars().next() {
+                Some('+' | '-') if chosen(h, i) => {
+                    body.push_str(line);
+                    changes += 1;
+                    kept = true;
+                }
+                Some(c) if c == drop => kept = false,
+                Some(c) if c == as_context => {
+                    body.push(' ');
+                    body.push_str(&line[1..]);
+                    kept = true;
+                }
+                Some('\\') => {
+                    if kept {
+                        body.push_str(line);
+                    }
+                }
+                _ => {
+                    body.push_str(line);
+                    kept = true;
+                }
+            }
+        }
+        if changes > 0 {
+            patch.push_str(all[start]);
+            patch.push_str(&body);
+            any = true;
+        }
+    }
+    any.then_some(patch)
+}
+
 /// Cloning a large repository takes longer than other network operations.
 const CLONE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
@@ -1017,6 +1078,11 @@ pub enum Op {
     StashDrop(String),
     Stage(Vec<String>),
     StageAll,
+    /// Stages (or with `unstage` takes out of the index) a patch made by `partial_patch`.
+    ApplyPatch {
+        patch: String,
+        unstage: bool,
+    },
     Unstage(Vec<String>),
     UnstageAll,
     Discard {
@@ -1086,6 +1152,8 @@ impl Op {
             Op::StashApply(s) => format!("Apply {s}"),
             Op::StashDrop(s) => format!("Drop {s}"),
             Op::Stage(_) | Op::StageAll => "Stage".into(),
+            Op::ApplyPatch { unstage: false, .. } => "Stage selection".into(),
+            Op::ApplyPatch { unstage: true, .. } => "Unstage selection".into(),
             Op::Unstage(_) | Op::UnstageAll => "Unstage".into(),
             Op::Discard { path, .. } => format!("Discard {path}"),
             Op::DiscardAll => "Discard all changes".into(),
@@ -1240,6 +1308,26 @@ impl Op {
                 g(&args)
             }
             Op::StageAll => g(&["add", "-A"]),
+            Op::ApplyPatch { patch, unstage } => {
+                // Through a file: the git layer keeps stdin closed.
+                static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let file = std::env::temp_dir()
+                    .join(format!("branchblitz-{}-{n}.patch", std::process::id()));
+                std::fs::write(&file, patch).map_err(|e| e.to_string())?;
+                let path = file
+                    .to_str()
+                    .ok_or("temp path is not valid text")?
+                    .to_string();
+                let mut args = vec!["apply", "--cached", "--recount", "--whitespace=nowarn"];
+                if *unstage {
+                    args.push("-R");
+                }
+                args.push(&path);
+                let r = g(&args);
+                let _ = std::fs::remove_file(&file);
+                r
+            }
             Op::Unstage(paths) => {
                 // Without a first commit there is no HEAD to restore from.
                 let mut args = if unborn {
@@ -1609,6 +1697,73 @@ mod tests {
         assert!(clone_repo("--upload-pack=touch x", &parent.join("evil")).is_err());
         assert!(clone_repo("/nonexistent/repo", &parent.join("none")).is_err());
         let _ = std::fs::remove_dir_all(&parent);
+    }
+
+    #[test]
+    fn stages_and_unstages_parts_of_a_file() {
+        let dir = repo("partial");
+        let base: String = (1..=20).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(dir.join("f.txt"), &base).unwrap();
+        git(&dir, &["add", "f.txt"]).unwrap();
+        git(&dir, &["commit", "-qm", "base"]).unwrap();
+        // Two hunks: line 2 changed (and line 3 added after it), line 18 changed.
+        let changed = base
+            .replace("line 2\n", "line 2 changed\nline 2b added\n")
+            .replace("line 18\n", "line 18 changed\n");
+        std::fs::write(dir.join("f.txt"), &changed).unwrap();
+        let worktree = || git(&dir, &["diff", "--", "f.txt"]).unwrap();
+        let staged = || git(&dir, &["diff", "--cached", "--", "f.txt"]).unwrap();
+        let apply = |patch: String, unstage: bool| {
+            Op::ApplyPatch { patch, unstage }.run(&dir, None).unwrap();
+        };
+
+        // The second hunk only.
+        apply(
+            partial_patch(&worktree(), |h, _| h == 1, false).unwrap(),
+            false,
+        );
+        assert!(staged().contains("+line 18 changed") && !staged().contains("line 2 changed"));
+        // From the first hunk only the added line (body: " line 1", "-line 2", "+line 2 changed",
+        // "+line 2b added", ...): index 3.
+        apply(
+            partial_patch(&worktree(), |h, i| h == 0 && i == 3, false).unwrap(),
+            false,
+        );
+        let s = staged();
+        assert!(
+            s.contains("+line 2b added") && !s.contains("+line 2 changed"),
+            "{s}"
+        );
+        assert!(worktree().contains("+line 2 changed"));
+        // Unstage the hunk with line 18 again (it is the second hunk of the staged diff).
+        apply(partial_patch(&staged(), |h, _| h == 1, true).unwrap(), true);
+        let s = staged();
+        assert!(
+            !s.contains("line 18") && s.contains("+line 2b added"),
+            "{s}"
+        );
+        // The working tree is untouched throughout.
+        assert_eq!(std::fs::read_to_string(dir.join("f.txt")).unwrap(), changed);
+        // Nothing chosen that changes anything, or no such hunk: no patch.
+        assert!(partial_patch(&worktree(), |h, i| h == 0 && i == 0, false).is_none());
+        assert!(partial_patch(&worktree(), |h, _| h == 5, false).is_none());
+    }
+
+    #[test]
+    fn partial_patch_keeps_the_no_newline_note() {
+        let dir = repo("partial-eof");
+        std::fs::write(dir.join("g.txt"), "a\nb").unwrap();
+        git(&dir, &["add", "g.txt"]).unwrap();
+        git(&dir, &["commit", "-qm", "base"]).unwrap();
+        std::fs::write(dir.join("g.txt"), "a\nc").unwrap();
+        let diff = git(&dir, &["diff", "--", "g.txt"]).unwrap();
+        Op::ApplyPatch {
+            patch: partial_patch(&diff, |_, _| true, false).unwrap(),
+            unstage: false,
+        }
+        .run(&dir, None)
+        .unwrap();
+        assert_eq!(git(&dir, &["show", ":g.txt"]).unwrap(), "a\nc");
     }
 
     #[test]

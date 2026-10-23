@@ -3406,6 +3406,35 @@ pub fn diff_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<A
         Some(Ok(t)) => parse_diff(t),
         _ => Vec::new(),
     };
+    // Staging part of a file: in the working-copy and the staged diff of a tracked file.
+    let raw = match content {
+        Some(Ok(t)) => t.as_str(),
+        _ => "",
+    };
+    let partial = matches!(
+        target,
+        DiffTarget::Unstaged {
+            untracked: false,
+            ..
+        } | DiffTarget::Staged { .. }
+    );
+    let unstage = matches!(target, DiffTarget::Staged { .. });
+    let verb = if unstage { "Unstage" } else { "Stage" };
+    // Per parsed line: its hunk and its index in that hunk's body (as `git::partial_patch` counts).
+    let mut hunk_pos = Vec::with_capacity(lines.len());
+    let (mut h, mut i) = (usize::MAX, 0);
+    for l in &lines {
+        if l.kind == '@' {
+            h = h.wrapping_add(1);
+            i = 0;
+            hunk_pos.push((h, usize::MAX));
+        } else {
+            hunk_pos.push((h, i));
+            i += 1;
+        }
+    }
+    let selection = &mut tab.diff_selection;
+    let anchor = &mut tab.diff_anchor;
     let (adds, dels) = lines.iter().fold((0, 0), |(a, d), l| match l.kind {
         '+' => (a + 1, d),
         '-' => (a, d + 1),
@@ -3481,6 +3510,25 @@ pub fn diff_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<A
                     {
                         acts.push(Action::CloseDiff);
                     }
+                    if partial && !selection.is_empty() {
+                        let n = selection.len();
+                        let label = format!("{verb} {n} line{}", if n == 1 { "" } else { "s" });
+                        if ds::Button::new(&label)
+                            .primary()
+                            .small()
+                            .tooltip("Shift-click extends the selection, Esc clears it")
+                            .show(ui, pal)
+                            .clicked()
+                        {
+                            let chosen: std::collections::HashSet<(usize, usize)> =
+                                selection.iter().map(|&k| hunk_pos[k]).collect();
+                            if let Some(patch) =
+                                git::partial_patch(raw, |h, i| chosen.contains(&(h, i)), unstage)
+                            {
+                                acts.push(Action::Op(Op::ApplyPatch { patch, unstage }));
+                            }
+                        }
+                    }
                     let (sep, _) = ui.allocate_exact_size(vec2(1.0, 20.0), Sense::hover());
                     ui.painter().rect_filled(sep, 0.0, pal.border);
                     ui.label(
@@ -3502,7 +3550,11 @@ pub fn diff_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<A
     ui.painter()
         .hline(line.x_range(), line.top(), Stroke::new(1.0, pal.border));
     if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-        acts.push(Action::CloseDiff);
+        if selection.is_empty() {
+            acts.push(Action::CloseDiff);
+        } else {
+            selection.clear();
+        }
     }
     match content {
         None => {
@@ -3530,7 +3582,9 @@ pub fn diff_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<A
         .auto_shrink([false, false])
         .id_salt("diff")
         .show_rows(ui, line_h, lines.len(), |ui, range| {
-            for l in &lines[range] {
+            for (k, l) in lines.iter().enumerate().skip(range.start).take(range.len()) {
+                let change = matches!(l.kind, '+' | '-');
+                let picked = selection.contains(&k);
                 let (bg, sign_c, fg) = match l.kind {
                     '+' => (pal.added_bg, pal.added, pal.text),
                     '-' => (pal.removed_bg, pal.removed, pal.text),
@@ -3548,9 +3602,48 @@ pub fn diff_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<A
                 // Old and new line numbers (40 px each), the sign column, then the code.
                 let code_x = if l.kind == '@' { 12.0 } else { 96.0 };
                 let w = (code_x + g.size().x + 12.0).max(ui.available_width());
-                let (rect, _) = ui.allocate_exact_size(vec2(w, line_h), Sense::hover());
+                let sense = if partial && change {
+                    Sense::click()
+                } else {
+                    Sense::hover()
+                };
+                let (rect, resp) = ui.allocate_exact_size(vec2(w, line_h), sense);
+                // A changed line: click to choose it, Shift-click for the lines up to it.
+                if partial && change {
+                    resp.widget_info(|| {
+                        egui::WidgetInfo::selected(
+                            egui::Role::Button,
+                            true,
+                            picked,
+                            format!("Line {}: {}", l.new.or(l.old).unwrap_or(0), l.text.trim()),
+                        )
+                    });
+                    if resp.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    if resp.clicked() {
+                        if ui.input(|i| i.modifiers.shift)
+                            && let Some(a) = *anchor
+                        {
+                            let (lo, hi) = (a.min(k), a.max(k));
+                            selection
+                                .extend((lo..=hi).filter(|&j| matches!(lines[j].kind, '+' | '-')));
+                        } else if !selection.remove(&k) {
+                            selection.insert(k);
+                        }
+                        *anchor = Some(k);
+                    }
+                }
                 let p = ui.painter();
                 p.rect_filled(rect, 0.0, bg);
+                if picked {
+                    p.rect_filled(rect, 0.0, pal.accent.gamma_multiply(0.18));
+                    p.rect_filled(
+                        Rect::from_min_size(rect.min, vec2(3.0, rect.height())),
+                        0.0,
+                        pal.accent,
+                    );
+                }
                 let yc = rect.center().y;
                 if l.kind != '@' {
                     for (n, x) in [(l.old, 40.0), (l.new, 80.0)] {
@@ -3575,6 +3668,27 @@ pub fn diff_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<A
                     }
                 }
                 p.galley(pos2(rect.left() + code_x, yc - g.size().y / 2.0), g, fg);
+                // The hunk header: stage (or unstage) the whole hunk, at the visible right edge.
+                if partial && l.kind == '@' {
+                    let hunk = hunk_pos[k].0;
+                    let right = ui.clip_rect().right() - 8.0;
+                    let r = Rect::from_min_max(
+                        pos2(right - 104.0, rect.top() + 2.0),
+                        pos2(right, rect.bottom() - 2.0),
+                    );
+                    let b = ui.put(r, |ui: &mut Ui| {
+                        ds::Button::new(format!("{verb} hunk"))
+                            .small()
+                            .quiet()
+                            .label(format!("{verb} hunk {}", hunk + 1))
+                            .show(ui, pal)
+                    });
+                    if b.clicked()
+                        && let Some(patch) = git::partial_patch(raw, |h, _| h == hunk, unstage)
+                    {
+                        acts.push(Action::Op(Op::ApplyPatch { patch, unstage }));
+                    }
+                }
             }
         });
 }

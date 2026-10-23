@@ -2197,6 +2197,81 @@ mod tests {
         }
     }
 
+    /// Part of a file: a whole hunk from its header, then one chosen line, into the index.
+    #[test]
+    fn stage_a_hunk_and_a_line() {
+        let mut s = Server::default();
+        let (_, out) = call(&mut s, "demo_repo", json!({}));
+        let work = out
+            .split(" at ")
+            .nth(1)
+            .unwrap()
+            .split(" (remote")
+            .next()
+            .unwrap()
+            .to_string();
+        let git = |args: &[&str]| {
+            let o = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&work)
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .output()
+                .unwrap();
+            assert!(
+                o.status.success(),
+                "{args:?}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+            String::from_utf8_lossy(&o.stdout).into_owned()
+        };
+        let base: String = (1..=20).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(format!("{work}/h.txt"), &base).unwrap();
+        git(&["add", "h.txt"]);
+        git(&["commit", "-qm", "h base"]);
+        let changed = base
+            .replace("line 2\n", "line 2 changed\nline 2b added\n")
+            .replace("line 18\n", "line 18 changed\n");
+        std::fs::write(format!("{work}/h.txt"), &changed).unwrap();
+        call(&mut s, "key", json!({"key": "F5"}));
+        call(&mut s, "wait_idle", json!({}));
+        call(&mut s, "click", json!({"label": "WIP"}));
+        let (err, out) = call(&mut s, "click", json!({"label": "h.txt"}));
+        assert!(!err, "{out}");
+        call(&mut s, "wait_idle", json!({}));
+        let (err, out) = call(&mut s, "click", json!({"label": "Stage hunk 2"}));
+        assert!(!err, "{out}");
+        call(&mut s, "wait_idle", json!({}));
+        let staged = git(&["diff", "--cached", "--", "h.txt"]);
+        assert!(
+            staged.contains("+line 18 changed") && !staged.contains("line 2 changed"),
+            "{staged}"
+        );
+
+        // The worktree diff now has one hunk; choose its added line 2b only.
+        let (err, out) = call(&mut s, "click", json!({"label": "Line 3: line 2b added"}));
+        assert!(!err, "{out}");
+        let shot = s.call("screenshot", &json!({}));
+        if std::env::var_os("BB_SAVE_SHOTS").is_some()
+            && let Some(d) = shot["content"][0]["data"].as_str()
+        {
+            let png = base64::engine::general_purpose::STANDARD.decode(d).unwrap();
+            std::fs::write(std::env::temp_dir().join("bb-partial.png"), png).unwrap();
+        }
+        let (err, out) = call(&mut s, "click", json!({"label": "Stage 1 line"}));
+        assert!(!err, "{out}");
+        call(&mut s, "wait_idle", json!({}));
+        let staged = git(&["diff", "--cached", "--", "h.txt"]);
+        assert!(
+            staged.contains("+line 2b added") && !staged.contains("+line 2 changed"),
+            "{staged}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(format!("{work}/h.txt")).unwrap(),
+            changed
+        );
+    }
+
     /// The checked out branch cannot be deleted; its menu says why, other branches delete.
     #[test]
     fn delete_branch_from_its_menu() {
