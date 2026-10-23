@@ -28,6 +28,7 @@ src/mcp.rs     `branchblitz mcp`: stdio MCP server driving the app headless (kit
 src/agent.rs   agent panel conversation; backends: Claude Code (`claude -p` stream-json) and a preview
 src/live.rs    the running app's own MCP endpoint (Unix socket) for its agent; `mcp --attach` bridge
 src/conflict.rs  conflict-marker parsing and per-block resolution (pure, unit-tested)
+src/perf.rs    performance baseline test (scripts/perf.sh)
 src/log.rs     log file (failed operations, crashes with backtrace), only in the windowed app
 scripts/demo-repo.sh   throwaway repo with origin, merges, tags, WIP (default /tmp/bbdemo)
 ```
@@ -50,6 +51,8 @@ scripts/demo-repo.sh && BB_DEMO=/tmp/bbdemo/work cargo test render -- --ignored 
 ```
 
 Look at the rendered PNGs for any UI change.
+
+Before a release: `scripts/perf.sh` (writes `perf/<version>.json`, compares with the previous one; same machine).
 
 ## See the app (MCP)
 

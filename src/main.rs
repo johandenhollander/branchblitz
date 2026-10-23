@@ -14,6 +14,7 @@ mod icons;
 mod live;
 mod log;
 mod mcp;
+mod perf;
 mod settings_view;
 mod system_theme;
 mod theme;

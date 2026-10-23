@@ -143,6 +143,9 @@ scripts/demo-repo.sh && BB_DEMO=/tmp/bbdemo/work cargo test render -- --ignored 
 ```
 
 `scripts/readme-screenshot.sh` renders `docs/screenshot.png` (needs ImageMagick).
+Performance: `scripts/perf.sh` measures loading, graph layout, frame times, memory and binary size on a
+generated large repository (`scripts/perf-repo.sh`) and writes `perf/<version>.json`, compared with the
+previous release; run it on the same machine before each release.
 Release packages: `scripts/package-linux.sh` (.tar.gz, .deb via `cargo deb`, AppImage) and
 `scripts/package-macos.sh <target>` write to `dist/`; `.github/workflows/release.yml` runs them for a `v*` tag
 and creates a draft release.

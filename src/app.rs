@@ -2454,6 +2454,11 @@ fn busy_text(label: &str) -> String {
 /// Hooks for the MCP server (`mcp.rs`), which drives the app without a window.
 impl BranchBlitz {
     #[cfg(test)]
+    pub(crate) fn tabs_ref(&self) -> &[RepoTab] {
+        &self.tabs
+    }
+
+    #[cfg(test)]
     pub(crate) fn tabs_mut(&mut self) -> &mut Vec<RepoTab> {
         &mut self.tabs
     }
