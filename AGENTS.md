@@ -69,6 +69,8 @@ into a test in `mcp::tests` or `render_tests`. Never point it at the user's real
 - Don't screenshot the real window with grim while the laptop panel is off → hangs; use the MCP `screenshot` tool.
 - Don't print to stdout outside tests → stdout is the MCP channel in `branchblitz mcp`.
 - Don't add UI that needs a real window (dialogs, spawning apps) without a `headless` fallback.
+- Don't push, merge or cherry-pick from a local `archive/*` branch → pre-publication history with names that must not go public; work on `main` only (brain: [[publishing]]).
+- Don't commit before the tests pass → gate the commit on the test result, not on running them.
 
 ## Language & git
 
