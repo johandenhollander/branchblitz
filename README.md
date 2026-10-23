@@ -4,7 +4,7 @@ A fast desktop git client written in Rust ([egui](https://github.com/emilk/egui)
 **always seeing every local branch, remote branch and tag in the commit graph, and merging them in two clicks.**
 It has an AI agent built in that can operate the app for you, and you see every step it takes.
 
-![BranchBlitz](docs/screenshot-dark.png)
+![BranchBlitz in dark and light](docs/screenshot.png)
 
 ## Features
 
@@ -119,6 +119,7 @@ cargo test
 scripts/demo-repo.sh && BB_DEMO=/tmp/bbdemo/work cargo test render -- --ignored --nocapture   # renders /tmp/bb-*.png
 ```
 
+`scripts/readme-screenshot.sh` renders `docs/screenshot.png` (needs ImageMagick).
 `scripts/demo-repo.sh [dir]` builds a throwaway repository with a remote, branches, merges, a tag and
 uncommitted changes (default `/tmp/bbdemo`). The render tests drive the real UI against it (the merge test
 **merges `origin/develop` into the checked out branch**, so only point it at a throwaway repository).
