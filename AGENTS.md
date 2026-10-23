@@ -28,6 +28,7 @@ src/mcp.rs     `branchblitz mcp`: stdio MCP server driving the app headless (kit
 src/agent.rs   agent panel conversation; backends: Claude Code (`claude -p` stream-json) and a preview
 src/live.rs    the running app's own MCP endpoint (Unix socket) for its agent; `mcp --attach` bridge
 src/conflict.rs  conflict-marker parsing and per-block resolution (pure, unit-tested)
+src/log.rs     log file (failed operations, crashes with backtrace), only in the windowed app
 scripts/demo-repo.sh   throwaway repo with origin, merges, tags, WIP (default /tmp/bbdemo)
 ```
 
@@ -37,6 +38,7 @@ scripts/demo-repo.sh   throwaway repo with origin, merges, tags, WIP (default /t
 cargo run -- /tmp/bbdemo/work
 cargo install --path .        # ~/.local/bin/branchblitz symlinks to ~/.cargo/bin
 BB_DEBUG_REPAINT=1 branchblitz   # stderr: frames per 2 s and why (an idle window should draw none)
+BB_DEBUG_PANIC=1 branchblitz     # crashes after the first frame: checks the crash log and the report at the next start
 ```
 
 ## Verify work (all must pass)

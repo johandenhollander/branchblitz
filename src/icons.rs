@@ -38,6 +38,9 @@ pub const PALETTE: &str = "\u{e1dd}";
 pub const PENCIL: &str = "\u{e1f9}";
 pub const PLUS: &str = "\u{e141}";
 pub const SPARKLES: &str = "\u{e417}";
+pub const INFO: &str = "\u{e0fe}";
+pub const BUG: &str = "\u{e20c}";
+pub const EXTERNAL_LINK: &str = "\u{e0bd}";
 pub const REFRESH_CW: &str = "\u{e149}";
 pub const ROTATE_CCW: &str = "\u{e14c}";
 pub const SEARCH: &str = "\u{e155}";
@@ -91,6 +94,9 @@ pub const ALL: &[&str] = &[
     PENCIL,
     PLUS,
     SPARKLES,
+    INFO,
+    BUG,
+    EXTERNAL_LINK,
     REFRESH_CW,
     ROTATE_CCW,
     SEARCH,

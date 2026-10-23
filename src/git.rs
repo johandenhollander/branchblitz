@@ -107,6 +107,11 @@ fn git_lenient(repo: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// `git version 2.47.0`, for the diagnostics in Settings, About.
+pub fn version() -> Result<String, String> {
+    git(&std::env::temp_dir(), &["--version"]).map(|s| s.trim().to_string())
+}
+
 /// Returns the top level of the working tree that contains `path`.
 pub fn toplevel(path: &Path) -> Result<PathBuf, String> {
     git(path, &["rev-parse", "--show-toplevel"]).map(|s| PathBuf::from(s.trim()))

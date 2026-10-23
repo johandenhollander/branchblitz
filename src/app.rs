@@ -413,6 +413,8 @@ pub struct BranchBlitz {
     /// discrete GPU was asked for at this start.
     renderer: String,
     high_performance_at_start: bool,
+    /// System, desktop and git version, for the diagnostics (asked once).
+    system: String,
     /// The app's own MCP endpoint for its agent, and tool calls waiting for their result.
     live: Option<crate::live::Live>,
     live_pending: Vec<Pending>,
@@ -484,6 +486,7 @@ impl BranchBlitz {
                 })
                 .unwrap_or_else(|| "unknown".into()),
             high_performance_at_start: settings.gpu_high_performance,
+            system: system_info(),
             live: None,
             live_pending: Vec::new(),
             tab_alias: HashMap::new(),
@@ -878,6 +881,10 @@ impl BranchBlitz {
                     }
                 }
                 MsgKind::Loaded(generation, Err(e)) => {
+                    crate::log::write(
+                        "ERROR",
+                        &format!("loading {}: {e}", self.tabs[i].path.display()),
+                    );
                     let tab = &mut self.tabs[i];
                     tab.loads_done = tab.loads_done.max(generation);
                     tab.tags_pending = false;
@@ -909,6 +916,14 @@ impl BranchBlitz {
                             self.status_line = Some((true, text));
                         }
                         Err(e) => {
+                            crate::log::write(
+                                "ERROR",
+                                &format!(
+                                    "{} failed in {}: {e}",
+                                    op.label(),
+                                    self.tabs[i].path.display()
+                                ),
+                            );
                             self.status_line = Some((
                                 false,
                                 format!(
@@ -1004,7 +1019,12 @@ impl BranchBlitz {
                         *content = Some(r);
                     }
                 }
-                MsgKind::Agent(event) => self.tabs[i].agent.apply(event),
+                MsgKind::Agent(event) => {
+                    if let crate::agent::Event::Error(e) = &event {
+                        crate::log::write("AGENT", e);
+                    }
+                    self.tabs[i].agent.apply(event)
+                }
                 MsgKind::PickedFolder(_) => unreachable!(),
             }
         }
@@ -1769,10 +1789,14 @@ impl BranchBlitz {
                 "None found: install Claude Code (claude on the PATH)".into()
             }
         };
+        let diagnostics = self.diagnostics(&agent);
+        let log = crate::log::path().map(|p| p.display().to_string());
         let info = settings_view::Info {
             agent: &agent,
             renderer: &self.renderer,
             high_performance_at_start: self.high_performance_at_start,
+            diagnostics: &diagnostics,
+            log: log.as_deref(),
         };
         let out = settings_view::window(ctx, &mut self.settings, &mut self.settings_page, &info);
         if out.style_changed {
@@ -1787,6 +1811,11 @@ impl BranchBlitz {
         }
         if out.colors_changed {
             self.recolor();
+        }
+        if out.open_log
+            && let Some(p) = crate::log::path()
+        {
+            self.open_file(&p);
         }
         if out.close {
             self.modal = None;
@@ -2114,6 +2143,36 @@ impl BranchBlitz {
         self.headless = true;
     }
 
+    /// What a bug report needs: version, system, rendering, git, agent.
+    fn diagnostics(&self, agent: &str) -> String {
+        let s = &self.settings;
+        format!(
+            "BranchBlitz {}\n{}\nRendering: {}{}\nAgent: {agent}; model {}; access {:?}",
+            env!("CARGO_PKG_VERSION"),
+            self.system,
+            self.renderer,
+            if s.gpu_high_performance {
+                " (high performance chosen)"
+            } else {
+                ""
+            },
+            s.agent_model.as_deref().unwrap_or("default"),
+            s.agent_access,
+        )
+    }
+
+    /// After a crash (see `log::init`): says so, and where the details are.
+    pub fn report_crash(&mut self) {
+        let log = crate::log::path().map_or("the log".into(), |p| p.display().to_string());
+        self.modal = Some(Modal::Error {
+            title: "BranchBlitz quit unexpectedly".into(),
+            body: format!(
+                "The last session ended with a crash. The details are in {log}. A bug report \
+                 with them helps a lot: Settings, About, Report a bug."
+            ),
+        });
+    }
+
     /// Answers with the agent CLI that is installed (Claude Code), if any, and lets it use the
     /// app through its own MCP endpoint.
     pub fn use_installed_agent(&mut self) {
@@ -2347,6 +2406,10 @@ impl eframe::App for BranchBlitz {
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         debug_repaints(ctx);
+        // To check the crash report: BB_DEBUG_PANIC=1 crashes after the first frame.
+        if std::env::var_os("BB_DEBUG_PANIC").is_some() && ctx.cumulative_pass_nr() > 1 {
+            panic!("BB_DEBUG_PANIC is set");
+        }
         self.handle_messages();
         self.serve_agent_tools();
         // F5 reloads, e.g. after changing the repository outside the app.
@@ -2640,6 +2703,30 @@ fn debug_repaints(ctx: &egui::Context) {
 }
 
 // ---------------------------------------------------------------- agent tools
+
+/// System, desktop session and git, for the diagnostics.
+fn system_info() -> String {
+    let os = std::fs::read_to_string("/etc/os-release")
+        .ok()
+        .and_then(|t| {
+            t.lines()
+                .find_map(|l| l.strip_prefix("PRETTY_NAME="))
+                .map(|v| v.trim_matches('"').to_string())
+        })
+        .unwrap_or_else(|| std::env::consts::OS.to_string());
+    let var = |k: &str| std::env::var(k).unwrap_or_default();
+    let desktop = [var("XDG_CURRENT_DESKTOP"), var("XDG_SESSION_TYPE")]
+        .into_iter()
+        .filter(|v| !v.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "System: {os} ({})\nDesktop: {}\nGit: {}",
+        std::env::consts::ARCH,
+        if desktop.is_empty() { "-" } else { &desktop },
+        git::version().unwrap_or_else(|e| format!("not found ({e})")),
+    )
+}
 
 /// The tab is doing something the agent should wait for (its own answer excluded).
 fn tab_busy(t: &RepoTab) -> bool {

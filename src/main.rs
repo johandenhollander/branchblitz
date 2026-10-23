@@ -12,6 +12,7 @@ mod git;
 mod graph;
 mod icons;
 mod live;
+mod log;
 mod mcp;
 mod settings_view;
 mod system_theme;
@@ -123,6 +124,7 @@ fn main() -> eframe::Result {
         }
         return Ok(());
     }
+    let crashed = log::init();
     let high = high_performance_chosen();
     if !high {
         hide_discrete_vulkan();
@@ -149,6 +151,9 @@ fn main() -> eframe::Result {
             color_scheme::watch(cc.egui_ctx.clone());
             let mut app = app::BranchBlitz::new(cc, open);
             app.use_installed_agent();
+            if crashed {
+                app.report_crash();
+            }
             Ok(Box::new(app))
         }),
     )

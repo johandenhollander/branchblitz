@@ -2020,6 +2020,52 @@ mod tests {
         }
     }
 
+    /// Settings, About: the diagnostics for a bug report and the buttons to send them.
+    #[test]
+    fn about_page_shows_diagnostics() {
+        let mut s = Server::default();
+        call(&mut s, "demo_repo", json!({}));
+        call(&mut s, "click", json!({"label": "Settings"}));
+        let (err, out) = call(&mut s, "click", json!({"label": "About"}));
+        assert!(!err, "{out}");
+        let (_, w) = call(&mut s, "widgets", json!({"limit": 400}));
+        for want in [
+            "Report a bug",
+            "Copy diagnostics",
+            "Git: git version",
+            "Rendering:",
+            "Agent:",
+        ] {
+            assert!(w.contains(want), "{want}: {w}");
+        }
+        assert!(
+            w.contains(&format!("BranchBlitz {}", env!("CARGO_PKG_VERSION"))),
+            "{w}"
+        );
+        let shot = s.call("screenshot", &json!({}));
+        if std::env::var_os("BB_SAVE_SHOTS").is_some()
+            && let Some(d) = shot["content"][0]["data"].as_str()
+        {
+            let png = base64::engine::general_purpose::STANDARD.decode(d).unwrap();
+            std::fs::write(std::env::temp_dir().join("bb-about.png"), png).unwrap();
+        }
+    }
+
+    /// After a crash the next start says so and points at the log.
+    #[test]
+    fn crash_is_reported_at_the_next_start() {
+        let mut s = Server::default();
+        call(&mut s, "demo_repo", json!({}));
+        s.session.as_mut().unwrap().state_mut().report_crash();
+        let (_, out) = call(&mut s, "wait_idle", json!({}));
+        assert!(
+            out.contains("dialog: BranchBlitz quit unexpectedly"),
+            "{out}"
+        );
+        let (_, w) = call(&mut s, "widgets", json!({"label": "Report a bug"}));
+        assert!(w.contains("Report a bug"), "{w}");
+    }
+
     /// The checked out branch cannot be deleted; its menu says why, other branches delete.
     #[test]
     fn delete_branch_from_its_menu() {

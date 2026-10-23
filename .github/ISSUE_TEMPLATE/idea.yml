@@ -1,0 +1,16 @@
+name: Idea or missing feature
+description: Something BranchBlitz could do (better)
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like?
+      description: What are you trying to do, and how would you like BranchBlitz to help?
+    validations:
+      required: true
+  - type: textarea
+    id: now
+    attributes:
+      label: How do you do it now?
+      description: In another git client, the terminal, or not at all.

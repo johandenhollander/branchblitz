@@ -16,16 +16,18 @@ pub enum Page {
     #[default]
     Appearance,
     Agents,
+    About,
 }
 
 impl Page {
-    const ALL: [Page; 3] = [Page::General, Page::Appearance, Page::Agents];
+    const ALL: [Page; 4] = [Page::General, Page::Appearance, Page::Agents, Page::About];
 
     fn title(self) -> &'static str {
         match self {
             Page::General => "General",
             Page::Appearance => "Appearance",
             Page::Agents => "Agents",
+            Page::About => "About",
         }
     }
 
@@ -34,6 +36,7 @@ impl Page {
             Page::General => icons::SETTINGS,
             Page::Appearance => icons::PALETTE,
             Page::Agents => icons::BOT,
+            Page::About => icons::INFO,
         }
     }
 }
@@ -45,6 +48,7 @@ pub struct Outcome {
     /// Theme, contrast, sizes or animation speed: re-apply the egui style.
     pub style_changed: bool,
     pub fonts_changed: bool,
+    pub open_log: bool,
 }
 
 /// The size of the Settings window, also used for the agent shown large.
@@ -68,6 +72,9 @@ pub struct Info<'a> {
     pub renderer: &'a str,
     /// The GPU choice the app started with (a change applies at the next start).
     pub high_performance_at_start: bool,
+    /// Version, system, rendering, git and agent, for bug reports.
+    pub diagnostics: &'a str,
+    pub log: Option<&'a str>,
 }
 
 pub fn window(
@@ -121,6 +128,7 @@ pub fn window(
                                     color_rules_editor(ui, &mut settings.color_rules, &pal);
                             }
                             Page::Agents => agents(ui, settings, &pal, info.agent),
+                            Page::About => out.open_log = about(ui, settings, &pal, info),
                         });
                 },
             );
@@ -267,6 +275,81 @@ fn general(ui: &mut Ui, s: &mut Settings, pal: &Palette, info: &Info) {
             ui.label(RichText::new(info.renderer).color(pal.text_muted));
             ui.end_row();
         });
+}
+
+const REPO: &str = "https://github.com/johandenhollander/branchblitz";
+
+/// Version and diagnostics, with a way to report a bug (the issue form gets the diagnostics).
+/// Returns whether to open the log.
+fn about(ui: &mut Ui, _s: &mut Settings, pal: &Palette, info: &Info) -> bool {
+    let mut open_log = false;
+    section(ui, &format!("BranchBlitz {}", env!("CARGO_PKG_VERSION")));
+    ui.label(RichText::new("A fast desktop git client.").color(pal.text_muted));
+    ui.add_space(4.0);
+    ui.hyperlink_to(REPO.trim_start_matches("https://"), REPO);
+    section(ui, "Diagnostics");
+    egui::Frame::new()
+        .fill(pal.sunken)
+        .corner_radius(CornerRadius::same(theme::RADIUS_MD))
+        .inner_margin(10.0)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new(info.diagnostics).monospace().color(pal.text));
+        });
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        if ds::Button::new("Report a bug")
+            .icon(icons::BUG)
+            .primary()
+            .show(ui, pal)
+            .clicked()
+        {
+            let url = format!(
+                "{REPO}/issues/new?template=bug.yml&diagnostics={}",
+                url_encode(info.diagnostics)
+            );
+            ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+        }
+        if ds::Button::new("Copy diagnostics")
+            .icon(icons::COPY)
+            .show(ui, pal)
+            .clicked()
+        {
+            ui.ctx().copy_text(info.diagnostics.to_string());
+        }
+        if info.log.is_some()
+            && ds::Button::new("Open log")
+                .icon(icons::EXTERNAL_LINK)
+                .show(ui, pal)
+                .clicked()
+        {
+            open_log = true;
+        }
+    });
+    if let Some(log) = info.log {
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new(format!(
+                "The log ({log}) has failed operations and crashes; it can contain repository \
+                 names and paths, so check it before sharing."
+            ))
+            .size(12.0)
+            .color(pal.text_subtle),
+        );
+    }
+    open_log
+}
+
+/// Percent-encodes `s` for a URL query value.
+fn url_encode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
 /// The agent in the panel at the bottom right: which CLI, model, access, what to show, and
@@ -890,4 +973,15 @@ pub fn color_rules_editor(ui: &mut Ui, rules: &mut Vec<ColorRule>, pal: &Palette
         }
     });
     changed
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn url_encode_keeps_safe_characters() {
+        assert_eq!(
+            super::url_encode("Git: 2.47 a/b\né"),
+            "Git%3A%202.47%20a%2Fb%0A%C3%A9"
+        );
+    }
 }

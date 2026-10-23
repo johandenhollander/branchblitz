@@ -112,6 +112,13 @@ Destructive actions ask first in a red alert bar, whose button only works when t
 prompt. Opening a repository runs git in it, and a repository's own git config (for example
 `core.fsmonitor`) can run programs, exactly as in a terminal: only open repositories you trust.
 
+## Reporting bugs
+
+Settings, About, **Report a bug** opens a GitHub issue with the version, system, rendering and git version
+filled in. BranchBlitz logs failed operations and crashes (with a backtrace) to a log file, shown on the same
+page; it can contain repository names and paths, so check what you share. After a crash, the next start
+says so.
+
 ## Keyboard
 
 - `↑` / `↓`: move through the commit list

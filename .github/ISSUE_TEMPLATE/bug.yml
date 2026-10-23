@@ -1,0 +1,35 @@
+name: Bug report
+description: Something doesn't work as it should
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a repository with …
+        2. Right-click …
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: >
+        Filled in when you use Settings, About, Report a bug in BranchBlitz (or paste "Copy diagnostics").
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log (optional)
+      description: >
+        The relevant lines from the log (Settings, About, Open log). It can contain repository names and
+        paths: remove what shouldn't be public.
+      render: text
