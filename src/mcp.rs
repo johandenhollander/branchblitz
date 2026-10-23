@@ -2066,6 +2066,38 @@ mod tests {
         assert!(w.contains("Report a bug"), "{w}");
     }
 
+    /// A newer release shows as a button in the toolbar and on the About page.
+    #[test]
+    fn newer_release_is_offered() {
+        let mut s = Server::default();
+        call(&mut s, "demo_repo", json!({}));
+        let (_, w) = call(&mut s, "widgets", json!({"label": "Update: v"}));
+        assert!(!w.contains("Update: v"), "nothing seen yet: {w}");
+        s.session
+            .as_mut()
+            .unwrap()
+            .state_mut()
+            .set_latest_version("99.0.0");
+        call(&mut s, "wait_idle", json!({}));
+        let (_, w) = call(&mut s, "widgets", json!({"label": "Update: v"}));
+        assert!(w.contains("Update: v99.0.0"), "{w}");
+        call(&mut s, "click", json!({"label": "Settings"}));
+        call(&mut s, "click", json!({"label": "About"}));
+        let (_, w) = call(&mut s, "widgets", json!({"label": "is available"}));
+        assert!(w.contains("Version 99.0.0 is available."), "{w}");
+        // Not newer than this build: no button.
+        s.session
+            .as_mut()
+            .unwrap()
+            .state_mut()
+            .set_latest_version("0.0.1");
+        call(&mut s, "wait_idle", json!({}));
+        call(&mut s, "key", json!({"key": "Escape"}));
+        call(&mut s, "wait_idle", json!({}));
+        let (_, w) = call(&mut s, "widgets", json!({"label": "Update: v"}));
+        assert!(!w.contains("Update: v"), "{w}");
+    }
+
     /// The checked out branch cannot be deleted; its menu says why, other branches delete.
     #[test]
     fn delete_branch_from_its_menu() {

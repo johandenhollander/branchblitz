@@ -49,6 +49,7 @@ pub struct Outcome {
     pub style_changed: bool,
     pub fonts_changed: bool,
     pub open_log: bool,
+    pub check_updates: bool,
 }
 
 /// The size of the Settings window, also used for the agent shown large.
@@ -75,6 +76,9 @@ pub struct Info<'a> {
     /// Version, system, rendering, git and agent, for bug reports.
     pub diagnostics: &'a str,
     pub log: Option<&'a str>,
+    /// A newer release than this build, and when the app last looked (Unix seconds, 0 = never).
+    pub newer: Option<&'a str>,
+    pub checked: i64,
 }
 
 pub fn window(
@@ -128,7 +132,9 @@ pub fn window(
                                     color_rules_editor(ui, &mut settings.color_rules, &pal);
                             }
                             Page::Agents => agents(ui, settings, &pal, info.agent),
-                            Page::About => out.open_log = about(ui, settings, &pal, info),
+                            Page::About => {
+                                (out.open_log, out.check_updates) = about(ui, settings, &pal, info)
+                            }
                         });
                 },
             );
@@ -277,16 +283,39 @@ fn general(ui: &mut Ui, s: &mut Settings, pal: &Palette, info: &Info) {
         });
 }
 
-const REPO: &str = "https://github.com/johandenhollander/branchblitz";
+const REPO: &str = crate::REPO_URL;
 
-/// Version and diagnostics, with a way to report a bug (the issue form gets the diagnostics).
-/// Returns whether to open the log.
-fn about(ui: &mut Ui, _s: &mut Settings, pal: &Palette, info: &Info) -> bool {
+/// Version, updates and diagnostics, with a way to report a bug (the issue form gets the
+/// diagnostics). Returns whether to open the log and whether to look for updates now.
+fn about(ui: &mut Ui, s: &mut Settings, pal: &Palette, info: &Info) -> (bool, bool) {
     let mut open_log = false;
+    let mut check = false;
     section(ui, &format!("BranchBlitz {}", env!("CARGO_PKG_VERSION")));
     ui.label(RichText::new("A fast desktop git client.").color(pal.text_muted));
     ui.add_space(4.0);
     ui.hyperlink_to(REPO.trim_start_matches("https://"), REPO);
+    section(ui, "Updates");
+    ui.horizontal(|ui| {
+        match info.newer {
+            Some(v) => {
+                ui.label(RichText::new(format!("Version {v} is available.")).color(pal.accent));
+                ui.hyperlink_to("Download", format!("{REPO}/releases/tag/v{v}"));
+            }
+            None if info.checked > 0 => {
+                ui.label(RichText::new("This is the newest version.").color(pal.text_muted));
+            }
+            None => {
+                ui.label(RichText::new("Not checked yet.").color(pal.text_muted));
+            }
+        }
+        if ds::Button::new("Check now").small().show(ui, pal).clicked() {
+            check = true;
+        }
+    });
+    ui.checkbox(
+        &mut s.check_updates,
+        "Look for a new version once a day (asks GitHub for its tags)",
+    );
     section(ui, "Diagnostics");
     egui::Frame::new()
         .fill(pal.sunken)
@@ -337,7 +366,7 @@ fn about(ui: &mut Ui, _s: &mut Settings, pal: &Palette, info: &Info) -> bool {
             .color(pal.text_subtle),
         );
     }
-    open_log
+    (open_log, check)
 }
 
 /// Percent-encodes `s` for a URL query value.

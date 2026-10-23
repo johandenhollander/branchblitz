@@ -57,6 +57,11 @@ pub struct Settings {
     pub agent_instructions: String,
     /// The discrete GPU instead of the integrated one (applies at the next start).
     pub gpu_high_performance: bool,
+    /// Look once a day for a newer release; when it last looked (Unix seconds) and the newest
+    /// version it saw.
+    pub check_updates: bool,
+    pub updates_checked: i64,
+    pub latest_version: Option<String>,
     /// What the Pull button runs, per repository path.
     pub pull_modes: HashMap<String, git::PullMode>,
     /// Repositories where the Pull button fetches instead (its default is "Fetch All").
@@ -176,6 +181,9 @@ impl Default for Settings {
             agent_show_tools: false,
             agent_instructions: String::new(),
             gpu_high_performance: false,
+            check_updates: true,
+            updates_checked: 0,
+            latest_version: None,
             pull_modes: HashMap::new(),
             fetch_default: Default::default(),
             columns: HashMap::new(),
@@ -219,6 +227,8 @@ enum MsgKind {
     Diff(u64, DiffTarget, Result<String, String>),
     PickedFolder(PathBuf),
     Agent(crate::agent::Event),
+    /// The newest release on GitHub, or why it couldn't be asked.
+    Latest(Result<Option<String>, String>),
 }
 
 /// What the agent may do without asking the user.
@@ -641,6 +651,12 @@ impl BranchBlitz {
     }
 
     #[cfg(test)]
+    pub(crate) fn set_latest_version(&mut self, v: &str) {
+        self.settings.latest_version = Some(v.into());
+        self.settings.updates_checked = 1;
+    }
+
+    #[cfg(test)]
     pub(crate) fn agent_prompt_for_tests(&self) -> String {
         self.settings.agent_prompt()
     }
@@ -819,6 +835,16 @@ impl BranchBlitz {
             if let MsgKind::PickedFolder(p) = &msg.kind {
                 let p = p.clone();
                 self.open_repo(&p, true);
+                continue;
+            }
+            if let MsgKind::Latest(r) = &msg.kind {
+                match r {
+                    Ok(v) => {
+                        self.settings.latest_version = v.clone();
+                        self.settings.updates_checked = chrono::Utc::now().timestamp();
+                    }
+                    Err(e) => crate::log::write("INFO", &format!("update check: {e}")),
+                }
                 continue;
             }
             // Agent events follow their conversation into a replaced tab; the rest belongs to
@@ -1025,7 +1051,7 @@ impl BranchBlitz {
                     }
                     self.tabs[i].agent.apply(event)
                 }
-                MsgKind::PickedFolder(_) => unreachable!(),
+                MsgKind::PickedFolder(_) | MsgKind::Latest(_) => unreachable!(),
             }
         }
     }
@@ -1575,6 +1601,19 @@ impl BranchBlitz {
                 {
                     self.modal = Some(Modal::Settings);
                 }
+                if let Some(v) = self.newer_release().map(str::to_string)
+                    && ds::Button::new(format!("Update: v{v}"))
+                        .icon(icons::DOWNLOAD)
+                        .quiet()
+                        .tooltip("A newer BranchBlitz is available; opens the release page")
+                        .show(ui, pal)
+                        .clicked()
+                {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(format!(
+                        "{}/releases/tag/v{v}",
+                        crate::REPO_URL
+                    )));
+                }
                 if let Some(tab) = self.active.and_then(|i| self.tabs.get_mut(i))
                     && ds::Button::icon_only(icons::SEARCH, "Find commits (Ctrl F)")
                         .quiet()
@@ -1790,6 +1829,7 @@ impl BranchBlitz {
             }
         };
         let diagnostics = self.diagnostics(&agent);
+        let newer = self.newer_release().map(str::to_string);
         let log = crate::log::path().map(|p| p.display().to_string());
         let info = settings_view::Info {
             agent: &agent,
@@ -1797,6 +1837,8 @@ impl BranchBlitz {
             high_performance_at_start: self.high_performance_at_start,
             diagnostics: &diagnostics,
             log: log.as_deref(),
+            newer: newer.as_deref(),
+            checked: self.settings.updates_checked,
         };
         let out = settings_view::window(ctx, &mut self.settings, &mut self.settings_page, &info);
         if out.style_changed {
@@ -1811,6 +1853,9 @@ impl BranchBlitz {
         }
         if out.colors_changed {
             self.recolor();
+        }
+        if out.check_updates {
+            self.check_for_updates(true);
         }
         if out.open_log
             && let Some(p) = crate::log::path()
@@ -2159,6 +2204,32 @@ impl BranchBlitz {
             s.agent_model.as_deref().unwrap_or("default"),
             s.agent_access,
         )
+    }
+
+    /// Asks GitHub for the newest release, at most once a day (Settings, About). In the
+    /// background: the answer comes as a message.
+    pub fn check_for_updates(&mut self, force: bool) {
+        let day = 24 * 60 * 60;
+        let due = chrono::Utc::now().timestamp() - self.settings.updates_checked > day;
+        if self.headless || !(force || (self.settings.check_updates && due)) {
+            return;
+        }
+        let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
+        std::thread::spawn(move || {
+            let r = git::latest_release(crate::REPO_URL);
+            let _ = tx.send(Msg {
+                tab: 0,
+                kind: MsgKind::Latest(r),
+            });
+            ctx.request_repaint();
+        });
+    }
+
+    /// A release newer than this build, if one was seen.
+    fn newer_release(&self) -> Option<&str> {
+        let latest = self.settings.latest_version.as_deref()?;
+        let this = git::version_key(env!("CARGO_PKG_VERSION"))?;
+        (git::version_key(latest)? > this).then_some(latest)
     }
 
     /// After a crash (see `log::init`): says so, and where the details are.

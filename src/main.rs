@@ -58,6 +58,9 @@ fn chosen_gpu(high: bool) -> eframe::egui_wgpu::WgpuSetupCreateNew {
     setup
 }
 
+/// Where BranchBlitz lives: releases, issues, the update check.
+pub const REPO_URL: &str = "https://github.com/johandenhollander/branchblitz";
+
 const VK_DISABLE: &str = "VK_LOADER_DRIVERS_DISABLE";
 /// Set when BranchBlitz hid the NVIDIA Vulkan driver from itself (see `hide_discrete_vulkan`).
 static HID_DISCRETE_VULKAN: std::sync::atomic::AtomicBool =
@@ -151,6 +154,7 @@ fn main() -> eframe::Result {
             color_scheme::watch(cc.egui_ctx.clone());
             let mut app = app::BranchBlitz::new(cc, open);
             app.use_installed_agent();
+            app.check_for_updates(false);
             if crashed {
                 app.report_crash();
             }

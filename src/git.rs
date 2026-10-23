@@ -112,6 +112,27 @@ pub fn version() -> Result<String, String> {
     git(&std::env::temp_dir(), &["--version"]).map(|s| s.trim().to_string())
 }
 
+/// The newest release (`vX.Y.Z` tag) of the repository at `url`, e.g. `0.2.0`.
+pub fn latest_release(url: &str) -> Result<Option<String>, String> {
+    let out = git_network(
+        &std::env::temp_dir(),
+        &["ls-remote", "--tags", "--refs", "--", url],
+    )?;
+    Ok(out
+        .lines()
+        .filter_map(|l| l.split_once("refs/tags/v").map(|(_, v)| v.trim()))
+        .filter_map(|v| version_key(v).map(|k| (k, v.to_string())))
+        .max()
+        .map(|(_, v)| v))
+}
+
+/// `1.2.3` as numbers to compare; `None` for anything else (pre-releases included).
+pub fn version_key(v: &str) -> Option<(u64, u64, u64)> {
+    let mut p = v.split('.').map(|n| n.parse::<u64>().ok());
+    let key = (p.next()??, p.next()??, p.next()??);
+    p.next().is_none().then_some(key)
+}
+
 /// Returns the top level of the working tree that contains `path`.
 pub fn toplevel(path: &Path) -> Result<PathBuf, String> {
     git(path, &["rev-parse", "--show-toplevel"]).map(|s| PathBuf::from(s.trim()))
@@ -1498,6 +1519,28 @@ mod tests {
         }
         .run(&dir, Some(&data));
         assert!(r.is_err(), "a.txt is not conflicted");
+    }
+
+    #[test]
+    fn finds_the_newest_release_tag() {
+        assert_eq!(version_key("0.10.0"), Some((0, 10, 0)));
+        assert_eq!(version_key("1.0.0-beta"), None);
+        assert_eq!(version_key("1.0"), None);
+        let dir = repo("releases");
+        for t in ["v0.2.0", "v0.10.0", "v1.0.0-beta", "other"] {
+            git(&dir, &["tag", t]).unwrap();
+        }
+        let url = dir.to_str().unwrap();
+        assert_eq!(latest_release(url).unwrap().as_deref(), Some("0.10.0"));
+        assert!(latest_release("/nonexistent/repo").is_err());
+    }
+
+    /// Against GitHub (network): `cargo test latest_release_on_github -- --ignored`.
+    #[test]
+    #[ignore]
+    fn latest_release_on_github() {
+        let v = latest_release(crate::REPO_URL).unwrap();
+        assert!(v.as_deref().and_then(version_key).is_some(), "{v:?}");
     }
 
     #[test]
