@@ -64,6 +64,8 @@ pub struct Settings {
     pub latest_version: Option<String>,
     /// Where the last clone went (its parent folder): the next one starts there.
     pub clone_parent: Option<PathBuf>,
+    /// The hint about scaling under WSL was shown.
+    pub wsl_hint_shown: bool,
     /// What the Pull button runs, per repository path.
     pub pull_modes: HashMap<String, git::PullMode>,
     /// Repositories where the Pull button fetches instead (its default is "Fetch All").
@@ -187,6 +189,7 @@ impl Default for Settings {
             updates_checked: 0,
             latest_version: None,
             clone_parent: None,
+            wsl_hint_shown: false,
             pull_modes: HashMap::new(),
             fetch_default: Default::default(),
             columns: HashMap::new(),
@@ -316,6 +319,12 @@ enum Modal {
         body: String,
     },
     Settings,
+    /// Information, not an error (e.g. the WSL hint); `settings` offers a button to that page.
+    Notice {
+        title: String,
+        body: String,
+        settings: Option<settings_view::Page>,
+    },
     /// Clone a repository: URL, the folder to clone into, running, git's error.
     Clone {
         url: String,
@@ -2002,6 +2011,7 @@ impl BranchBlitz {
         let mut submit: Option<Op> = None;
         let mut clone: Option<(String, PathBuf)> = None;
         let mut browse_parent = false;
+        let mut open_settings: Option<settings_view::Page> = None;
         let target_tab = match modal {
             Modal::Input { tab, .. } => self.tabs.iter().position(|t| t.id == *tab),
             _ => None,
@@ -2082,6 +2092,32 @@ impl BranchBlitz {
                                 });
                             }
                             if ds::Button::new("Cancel").quiet().show(ui, &pal).clicked() {
+                                close = true;
+                            }
+                        });
+                    }
+                    Modal::Notice {
+                        title,
+                        body,
+                        settings,
+                    } => {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(icons::INFO).size(18.0).color(pal.accent));
+                            ui.label(ds::title(title.as_str()).color(pal.text));
+                        });
+                        ui.add(
+                            egui::Label::new(RichText::new(body.as_str()).color(pal.text)).wrap(),
+                        );
+                        actions(ui, &mut |ui| {
+                            if let Some(page) = *settings
+                                && ds::Button::new("Open settings")
+                                    .primary()
+                                    .show(ui, &pal)
+                                    .clicked()
+                            {
+                                open_settings = Some(page);
+                            }
+                            if ds::Button::new("OK").quiet().show(ui, &pal).clicked() {
                                 close = true;
                             }
                         });
@@ -2247,6 +2283,11 @@ impl BranchBlitz {
         }
         if let Some((url, dest)) = clone {
             self.start_clone(url, dest);
+        }
+        if let Some(page) = open_settings {
+            self.settings_page = page;
+            self.modal = Some(Modal::Settings);
+            return;
         }
         if browse_parent {
             self.pick_clone_parent();
@@ -2470,6 +2511,30 @@ impl BranchBlitz {
         (git::version_key(latest)? > this).then_some(latest)
     }
 
+    /// Under WSL, once: the Windows display scaling doesn't reach the app, and there is a
+    /// Windows build with the Windows title bar.
+    pub fn wsl_hint(&mut self) {
+        let wsl = std::env::var_os("WSL_DISTRO_NAME").is_some()
+            || std::fs::read_to_string("/proc/version")
+                .is_ok_and(|v| v.to_lowercase().contains("microsoft"));
+        if wsl && !self.settings.wsl_hint_shown && self.modal.is_none() {
+            self.show_wsl_hint();
+        }
+    }
+
+    pub(crate) fn show_wsl_hint(&mut self) {
+        self.settings.wsl_hint_shown = true;
+        self.modal = Some(Modal::Notice {
+            title: "Running under WSL".into(),
+            body: "WSL doesn't pass the Windows display scaling on to Linux apps, so BranchBlitz \
+                   may look small. Set the size in Settings, Appearance, Scale (or use Ctrl + and \
+                   Ctrl −).\n\nThere is also a Windows build (the …-windows-x86_64.zip download) \
+                   with the Windows title bar and scaling."
+                .into(),
+            settings: Some(settings_view::Page::Appearance),
+        });
+    }
+
     /// After a crash (see `log::init`): says so, and where the details are.
     pub fn report_crash(&mut self) {
         let log = crate::log::path().map_or("the log".into(), |p| p.display().to_string());
@@ -2675,6 +2740,7 @@ impl BranchBlitz {
                 match m {
                     Modal::Error { body, .. } => v["body"] = json!(body),
                     Modal::Input { value, .. } => v["value"] = json!(value),
+                    Modal::Notice { body, .. } => v["body"] = json!(body),
                     Modal::Clone { error, busy, .. } => {
                         v["busy"] = json!(busy);
                         v["error"] = json!(error);
@@ -2701,6 +2767,7 @@ fn modal_title(m: &Modal) -> String {
         },
         Modal::Settings => "Settings".into(),
         Modal::Clone { .. } => "Clone repository".into(),
+        Modal::Notice { title, .. } => title.clone(),
     }
 }
 

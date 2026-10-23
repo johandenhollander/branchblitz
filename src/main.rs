@@ -155,6 +155,7 @@ fn main() -> eframe::Result {
             let mut app = app::BranchBlitz::new(cc, open);
             app.use_installed_agent();
             app.check_for_updates(false);
+            app.wsl_hint();
             if crashed {
                 app.report_crash();
             }

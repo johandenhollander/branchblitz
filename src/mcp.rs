@@ -2170,6 +2170,33 @@ mod tests {
         assert!(!demo.join("clones").join("no-such-repo").exists());
     }
 
+    /// Settings, Appearance, Scale changes the zoom; under WSL a hint leads there once.
+    #[test]
+    fn scale_setting_and_wsl_hint() {
+        let mut s = Server::default();
+        call(&mut s, "demo_repo", json!({}));
+        s.session.as_mut().unwrap().state_mut().show_wsl_hint();
+        let (_, out) = call(&mut s, "wait_idle", json!({}));
+        assert!(out.contains("dialog: Running under WSL"), "{out}");
+        let (err, out) = call(&mut s, "click", json!({"label": "Open settings"}));
+        assert!(!err, "{out}");
+        assert!(out.contains("dialog: Settings"), "{out}");
+        let (err, out) = call(&mut s, "click", json!({"label": "Interface scale"}));
+        assert!(!err, "{out}");
+        let (err, out) = call(&mut s, "click", json!({"label": "150%"}));
+        assert!(!err, "{out}");
+        call(&mut s, "wait_idle", json!({}));
+        let zoom = s.session.as_ref().unwrap().ctx.zoom_factor();
+        assert!((zoom - 1.5).abs() < 0.01, "{zoom}");
+        let shot = s.call("screenshot", &json!({}));
+        if std::env::var_os("BB_SAVE_SHOTS").is_some()
+            && let Some(d) = shot["content"][0]["data"].as_str()
+        {
+            let png = base64::engine::general_purpose::STANDARD.decode(d).unwrap();
+            std::fs::write(std::env::temp_dir().join("bb-scale.png"), png).unwrap();
+        }
+    }
+
     /// The checked out branch cannot be deleted; its menu says why, other branches delete.
     #[test]
     fn delete_branch_from_its_menu() {

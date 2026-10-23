@@ -467,6 +467,35 @@ fn agents(ui: &mut Ui, s: &mut Settings, pal: &Palette, agent: &str) {
 /// Returns whether the style (theme, contrast, sizes, motion) and whether the fonts changed.
 fn appearance(ui: &mut Ui, s: &mut Settings, pal: &Palette) -> (bool, bool) {
     let def = theme::theme_def(&s.theme_name);
+    // First: under WSL (and on some high-DPI screens) it is the first thing to set.
+    section(ui, "Size");
+    row(
+        ui,
+        "Scale",
+        "The size of everything, for screens where it looks too small or too large (also Ctrl + \
+         and Ctrl −). Under WSL the Windows display scaling doesn't reach the app: set it here.",
+        |ui| {
+            let now = ui.ctx().zoom_factor();
+            let pct = |z: f32| format!("{:.0}%", z * 100.0);
+            let combo = egui::ComboBox::from_id_salt("scale")
+                .selected_text(pct(now))
+                .width(110.0)
+                .show_ui(ui, |ui| {
+                    for z in [0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5] {
+                        if ui
+                            .selectable_label((now - z).abs() < 0.01, pct(z))
+                            .clicked()
+                        {
+                            ui.ctx().set_zoom_factor(z);
+                        }
+                    }
+                });
+            combo.response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Interface scale")
+            });
+            false
+        },
+    );
     section(ui, "Color scheme");
     let gap = 12.0;
     let w = (ui.available_width() - 14.0 - 2.0 * gap) / 3.0;
