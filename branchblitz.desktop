@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=BranchBlitz
+Comment=Git client focused on branches and merging
+Exec=branchblitz %f
+Icon=branchblitz
+Terminal=false
+Categories=Development;RevisionControl;
+Keywords=bb;git;
+StartupWMClass=branchblitz

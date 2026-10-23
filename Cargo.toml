@@ -1,0 +1,25 @@
+[package]
+name = "branchblitz"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+description = "A fast desktop git client that shows every branch and tag in the graph, with an AI agent built in"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/johandenhollander/branchblitz"
+readme = "README.md"
+keywords = ["git", "gui", "egui", "desktop"]
+categories = ["development-tools", "command-line-utilities"]
+
+[dependencies]
+chrono = "0.4.45"
+eframe = { version = "0.37.0", features = ["persistence"] }
+egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }
+rfd = "0.17.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1"
+# Headless UI for `branchblitz mcp`.
+egui_kittest = { version = "0.37.0", features = ["wgpu", "eframe"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+base64 = "0.22"
+# Desktop light/dark preference from the XDG portal (already in the tree via accesskit).
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
