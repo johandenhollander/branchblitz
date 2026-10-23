@@ -1259,6 +1259,75 @@ mod tests {
         assert!(!w.contains("Close find"), "{w}");
     }
 
+    /// With more commits than the limit: scrolling to the end loads more, and find offers
+    /// matches in commits that are not loaded yet, loading until the first one is shown.
+    #[test]
+    fn loads_more_commits_and_finds_older_ones() {
+        let mut s = Server::default();
+        let (_, out) = call(&mut s, "demo_repo", json!({}));
+        let work = out
+            .split(" at ")
+            .nth(1)
+            .unwrap()
+            .split(" (remote")
+            .next()
+            .unwrap()
+            .to_string();
+        let ok = std::process::Command::new("sh")
+            .args([
+                "-c",
+                "for i in $(seq 250); do git commit -q --allow-empty -m \"Bulk change $i\"; done",
+            ])
+            .current_dir(&work)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(
+            ok.status.success(),
+            "{}",
+            String::from_utf8_lossy(&ok.stderr)
+        );
+        s.session
+            .as_mut()
+            .unwrap()
+            .state_mut()
+            .set_commit_limit(100);
+        call(&mut s, "key", json!({"key": "F5"}));
+        call(&mut s, "wait_idle", json!({}));
+        let loaded = |s: &mut Server| {
+            let st: Value =
+                serde_json::from_str(&call(s, "state", json!({"commits": 0})).1).unwrap();
+            st["tabs"][0]["commits_loaded"].as_u64().unwrap()
+        };
+        assert_eq!(loaded(&mut s), 100);
+
+        // Scrolling to the end of the graph loads the next 100.
+        call(&mut s, "scroll", json!({"dy": 3000}));
+        call(&mut s, "wait_idle", json!({}));
+        assert_eq!(loaded(&mut s), 200);
+
+        // Find: the demo's own commits are all older than the 200 loaded ones.
+        call(&mut s, "key", json!({"key": "F", "modifiers": ["ctrl"]}));
+        call(&mut s, "type_text", json!({"text": "proj-483"}));
+        call(&mut s, "wait_idle", json!({}));
+        let (_, w) = call(&mut s, "widgets", json!({"label": "older history"}));
+        assert!(w.contains("3 more in older history"), "{w}");
+        let shot = s.call("screenshot", &json!({}));
+        if std::env::var_os("BB_SAVE_SHOTS").is_some()
+            && let Some(d) = shot["content"][0]["data"].as_str()
+        {
+            let png = base64::engine::general_purpose::STANDARD.decode(d).unwrap();
+            std::fs::write(std::env::temp_dir().join("bb-find-older.png"), png).unwrap();
+        }
+        call(&mut s, "click", json!({"label": "Show older match"}));
+        call(&mut s, "wait_idle", json!({}));
+        assert!(loaded(&mut s) > 200, "loaded until the match");
+        let (_, w) = call(&mut s, "widgets", json!({"label": " of 3"}));
+        assert!(w.contains("\"1 of 3\""), "the match is selected: {w}");
+        let (_, w) = call(&mut s, "widgets", json!({"label": "older history"}));
+        assert!(!w.contains("more in older history"), "{w}");
+    }
+
     /// A demo repo whose current branch and `clash` both changed two separate lines of c.txt
     /// (mine/mine2 against theirs/theirs2). Returns the working directory and the branch.
     fn conflicting_demo(s: &mut Server) -> (String, String) {

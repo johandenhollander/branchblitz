@@ -1604,6 +1604,7 @@ fn find_bar(
     hits: &[usize],
     sel_row: Option<usize>,
     data: &RepoData,
+    row_of: &std::collections::HashMap<String, usize>,
     pal: &Palette,
     acts: &mut Vec<Action>,
 ) -> bool {
@@ -1674,6 +1675,11 @@ fn find_bar(
                             field.request_focus();
                         } else if field.changed() {
                             f.jump = true;
+                            f.older = None;
+                            let q = f.query.trim();
+                            if q.chars().count() >= 2 {
+                                acts.push(Action::FindHistory(q.to_string()));
+                            }
                             ui.ctx().request_repaint();
                         }
                         if (field.has_focus() || field.lost_focus())
@@ -1732,6 +1738,46 @@ fn find_bar(
                             close = true;
                         }
                     });
+                    // Matches in commits that are not loaded yet: load until the first one.
+                    let older: Vec<&String> = f
+                        .older
+                        .as_ref()
+                        .filter(|(q, _)| q.to_lowercase() == f.query.trim().to_lowercase())
+                        .map(|(_, shas)| shas.iter().filter(|s| !row_of.contains_key(*s)).collect())
+                        .unwrap_or_default();
+                    if let Some(first) = older.first() {
+                        ui.horizontal(|ui| {
+                            let text = match older.len() {
+                                1 => "1 more in older history".to_string(),
+                                n if n >= 500 => format!("{n}+ more in older history"),
+                                n => format!("{n} more in older history"),
+                            };
+                            let g = ui.painter().layout_job(ds::text_job(
+                                &text,
+                                12.0,
+                                400.0,
+                                pal.text_muted,
+                                false,
+                            ));
+                            let (r, resp) =
+                                ui.allocate_exact_size(vec2(width - 120.0, 24.0), Sense::hover());
+                            resp.widget_info(|| {
+                                egui::WidgetInfo::labeled(egui::Role::Label, true, text.clone())
+                            });
+                            ui.painter().galley(
+                                pos2(r.left() + 6.0, r.center().y - g.size().y / 2.0),
+                                g,
+                                pal.text_muted,
+                            );
+                            if ds::Button::new("Show older match")
+                                .small()
+                                .show(ui, pal)
+                                .clicked()
+                            {
+                                acts.push(Action::LoadUntil((*first).clone()));
+                            }
+                        });
+                    }
                 });
         });
     close
@@ -1856,6 +1902,8 @@ pub fn graph_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<
         row_of,
         new_branch,
         find,
+        limit,
+        loading_more,
         ..
     } = tab;
     let Some(data) = data.as_ref() else {
@@ -1918,7 +1966,7 @@ pub fn graph_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<
             Selection::Commit(s) => row_of.get(s.as_str()).copied(),
             _ => None,
         };
-        if find_bar(ui, full, find, &hits, sel_row, data, pal, acts) {
+        if find_bar(ui, full, find, &hits, sel_row, data, row_of, pal, acts) {
             *find = None;
         }
     }
@@ -2090,7 +2138,13 @@ pub fn graph_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<
         }
     }
     ui.spacing_mut().item_spacing.y = 0.0;
+    // Near the end of what is loaded, while there may be more: load the next portion.
+    let more = data.commits.len() >= limit.load(std::sync::atomic::Ordering::Relaxed);
     let out = area.show_rows(ui, ROW_H, total, |ui, range| {
+        if more && !*loading_more && range.end + 20 >= total {
+            *loading_more = true;
+            acts.push(Action::LoadMore);
+        }
         for row in range {
             let (rect, resp) =
                 ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());

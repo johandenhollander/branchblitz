@@ -239,6 +239,8 @@ enum MsgKind {
     Cloned(Result<PathBuf, String>),
     /// The folder chosen to clone into.
     PickedCloneParent(PathBuf),
+    /// Find matches in the whole history: the query and the commits.
+    FoundInHistory(String, Result<Vec<String>, String>),
 }
 
 /// What the agent may do without asking the user.
@@ -270,6 +272,12 @@ pub enum Action {
     Copy(String),
     /// Show this other worktree of the repository in the same tab.
     SwitchWorktree(PathBuf),
+    /// Load the next portion of older commits (scrolled to the end).
+    LoadMore,
+    /// Search the whole history for the find query (in the background).
+    FindHistory(String),
+    /// Load older commits until this one is loaded, then show it.
+    LoadUntil(String),
     /// Open (or switch to) the repository at this path in its own tab.
     OpenRepo(PathBuf),
     /// Open a file of the repository (relative path) in the desktop's default app.
@@ -355,6 +363,11 @@ pub struct RepoTab {
     /// line a Shift-click extends from.
     pub diff_selection: std::collections::BTreeSet<usize>,
     pub diff_anchor: Option<usize>,
+    /// How many commits this tab loads; grows when scrolling to the end or finding older commits.
+    pub limit: Arc<AtomicUsize>,
+    pub loading_more: bool,
+    /// Load further until this commit is loaded, then show it (a find match in older history).
+    load_until: Option<String>,
     diff_gen: u64,
     pub filter: String,
     pub find: Option<Find>,
@@ -404,6 +417,8 @@ pub struct Find {
     pub focus: bool,
     /// The query changed: go to the first match on the next frame, once the matches are known.
     pub jump: bool,
+    /// Matches in the whole history (query, newest first), from git: some may not be loaded.
+    pub older: Option<(String, Vec<String>)>,
 }
 
 pub struct NewBranch {
@@ -433,7 +448,6 @@ pub struct BranchBlitz {
     rx: Receiver<Msg>,
     ctx: egui::Context,
     next_id: u64,
-    limit: Arc<AtomicUsize>,
     modal: Option<Modal>,
     open_path: String,
     status_line: Option<(bool, String)>,
@@ -497,7 +511,6 @@ impl BranchBlitz {
         cc.egui_ctx.set_theme(settings.preference());
         let (tx, rx) = mpsc::channel();
         let mut app = BranchBlitz {
-            limit: Arc::new(AtomicUsize::new(settings.commit_limit)),
             settings: settings.clone(),
             tabs: Vec::new(),
             active: None,
@@ -587,12 +600,13 @@ impl BranchBlitz {
             .get(&root.display().to_string())
             .copied();
         let saved = saved.as_ref();
+        let limit = Arc::new(AtomicUsize::new(self.settings.commit_limit));
         let worker = spawn_worker(
             id,
             root.clone(),
             self.tx.clone(),
             self.ctx.clone(),
-            self.limit.clone(),
+            limit.clone(),
         );
         let name = root
             .file_name()
@@ -620,6 +634,9 @@ impl BranchBlitz {
             find: None,
             diff_selection: Default::default(),
             diff_anchor: None,
+            limit,
+            loading_more: false,
+            load_until: None,
             agent: Default::default(),
             conflict_choices: Vec::new(),
             conflict_for: 0,
@@ -681,6 +698,14 @@ impl BranchBlitz {
     }
 
     #[cfg(test)]
+    pub(crate) fn set_commit_limit(&mut self, n: usize) {
+        self.settings.commit_limit = n;
+        for t in &self.tabs {
+            t.limit.store(n, Ordering::Relaxed);
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn set_clone_parent(&mut self, p: PathBuf) {
         self.settings.clone_parent = Some(p);
     }
@@ -726,6 +751,15 @@ impl BranchBlitz {
             id = *self.tab_alias.get(&id)?;
         }
         None
+    }
+
+    /// Loads the next portion of older commits (the commit limit from Settings at a time).
+    fn load_more(&mut self, i: usize) {
+        let step = self.settings.commit_limit.max(100);
+        let tab = &mut self.tabs[i];
+        tab.limit.fetch_add(step, Ordering::Relaxed);
+        tab.loading_more = true;
+        self.reload(i);
     }
 
     fn switch_to(&mut self, i: usize) {
@@ -995,6 +1029,8 @@ impl BranchBlitz {
                         .map(|(n, c)| (c.sha.clone(), n))
                         .collect();
                     tab.load_error = None;
+                    tab.loading_more = false;
+                    let loaded_all = data.commits.len() < tab.limit.load(Ordering::Relaxed);
                     let dirty = data.status.is_dirty() || data.state != RepoState::Clean;
                     tab.data = Some(data);
                     if tab.selected == Selection::Wip && !dirty {
@@ -1027,6 +1063,17 @@ impl BranchBlitz {
                     };
                     if let Some(t) = refresh {
                         self.request_diff(i, t);
+                    }
+                    // Loading towards a find match in older history: there yet, or further.
+                    if let Some(sha) = self.tabs[i].load_until.clone() {
+                        if self.tabs[i].row_of.contains_key(&sha) {
+                            self.tabs[i].load_until = None;
+                            self.apply(i, vec![Action::Jump(sha)]);
+                        } else if loaded_all {
+                            self.tabs[i].load_until = None;
+                        } else {
+                            self.load_more(i);
+                        }
                     }
                 }
                 MsgKind::Loaded(generation, Err(e)) => {
@@ -1173,6 +1220,14 @@ impl BranchBlitz {
                         *content = Some(r);
                     }
                 }
+                MsgKind::FoundInHistory(query, r) => {
+                    let tab = &mut self.tabs[i];
+                    if let (Some(f), Ok(found)) = (&mut tab.find, r)
+                        && f.query.trim().to_lowercase() == query.to_lowercase()
+                    {
+                        f.older = Some((query, found));
+                    }
+                }
                 MsgKind::Agent(event) => {
                     if let crate::agent::Event::Error(e) = &event {
                         crate::log::write("AGENT", e);
@@ -1266,6 +1321,24 @@ impl BranchBlitz {
                 Action::Copy(s) => self.ctx.copy_text(s),
                 Action::SwitchWorktree(path) => self.switch_worktree(i, &path),
                 Action::OpenRepo(path) => self.open_repo(&path, true),
+                Action::LoadMore => self.load_more(i),
+                Action::LoadUntil(sha) => {
+                    self.tabs[i].load_until = Some(sha);
+                    self.load_more(i);
+                }
+                Action::FindHistory(query) => {
+                    let tab = &self.tabs[i];
+                    let (tx, ctx, path, id) =
+                        (self.tx.clone(), self.ctx.clone(), tab.path.clone(), tab.id);
+                    std::thread::spawn(move || {
+                        let r = git::search_commits(&path, &query, 500);
+                        let _ = tx.send(Msg {
+                            tab: id,
+                            kind: MsgKind::FoundInHistory(query, r),
+                        });
+                        ctx.request_repaint();
+                    });
+                }
                 Action::AgentSend => {
                     let (tx, ctx, id) = (self.tx.clone(), self.ctx.clone(), self.tabs[i].id);
                     let attach = self.agent_attach(i);
@@ -2006,8 +2079,9 @@ impl BranchBlitz {
         }
         if out.close {
             self.modal = None;
-            self.limit
-                .store(self.settings.commit_limit, Ordering::Relaxed);
+            for t in &self.tabs {
+                t.limit.store(self.settings.commit_limit, Ordering::Relaxed);
+            }
             if let Some(i) = self.active {
                 self.reload(i);
             }

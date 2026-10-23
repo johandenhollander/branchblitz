@@ -718,6 +718,45 @@ fn load_refs(repo: &Path, remotes: &[String]) -> Result<(Vec<RefInfo>, Vec<Strin
     Ok((refs, defaults))
 }
 
+/// Commits in the whole history (the refs `load` shows) whose message contains `query`
+/// (case-insensitive), or whose hash starts with it; newest first, at most `max`.
+pub fn search_commits(repo: &Path, query: &str, max: usize) -> Result<Vec<String>, String> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Ok(Vec::new());
+    }
+    let grep = format!("--grep={q}");
+    let n = format!("-n{max}");
+    let head = git(repo, &["rev-parse", "-q", "--verify", "HEAD"]).is_ok();
+    let mut args = vec![
+        "log",
+        "--branches",
+        "--remotes",
+        "--tags",
+        "--date-order",
+        "-i",
+        "--fixed-strings",
+        grep.as_str(),
+        "--format=%H",
+        n.as_str(),
+    ];
+    if head {
+        args.push("HEAD");
+    }
+    let mut found: Vec<String> = git(repo, &args)?.lines().map(str::to_string).collect();
+    // A hash (prefix): the commit it names, if any.
+    if q.len() >= 4 && q.bytes().all(|b| b.is_ascii_hexdigit()) {
+        let rev = format!("{q}^{{commit}}");
+        if let Ok(sha) = git(repo, &["rev-parse", "-q", "--verify", &rev]) {
+            let sha = sha.trim().to_string();
+            if !found.contains(&sha) {
+                found.insert(0, sha);
+            }
+        }
+    }
+    Ok(found)
+}
+
 fn load_commits(repo: &Path, limit: usize, has_head: bool) -> Result<Vec<Commit>, String> {
     let n = format!("-n{limit}");
     let mut args = vec![
@@ -1764,6 +1803,35 @@ mod tests {
         .run(&dir, None)
         .unwrap();
         assert_eq!(git(&dir, &["show", ":g.txt"]).unwrap(), "a\nc");
+    }
+
+    #[test]
+    fn searches_the_whole_history() {
+        let dir = repo("search");
+        for i in 0..30 {
+            std::fs::write(dir.join("s.txt"), format!("{i}\n")).unwrap();
+            git(&dir, &["add", "s.txt"]).unwrap();
+            git(
+                &dir,
+                &[
+                    "commit",
+                    "-qm",
+                    &format!("Change {i}: Needle in a [haystack]"),
+                ],
+            )
+            .unwrap();
+        }
+        // More than a load with limit 5 shows; case-insensitive and literal ("[" is no pattern).
+        let hits = search_commits(&dir, "needle in a [HAYSTACK]", 100).unwrap();
+        assert_eq!(hits.len(), 30);
+        assert_eq!(load(&dir, 5).unwrap().commits.len(), 5);
+        let sha = git(&dir, &["rev-parse", "HEAD~20"]).unwrap();
+        let by_hash = search_commits(&dir, &sha[..8], 100).unwrap();
+        assert_eq!(by_hash.first().map(String::as_str), Some(sha.trim()));
+        assert!(
+            search_commits(&dir, "--all", 100).unwrap().is_empty(),
+            "an option is text"
+        );
     }
 
     #[test]
