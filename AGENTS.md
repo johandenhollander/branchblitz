@@ -27,6 +27,7 @@ assets/        fonts (OFL/ISC licences alongside), bolt.png
 src/mcp.rs     `branchblitz mcp`: stdio MCP server driving the app headless (kittest harness)
 src/agent.rs   agent panel conversation; backends: Claude Code (`claude -p` stream-json) and a preview
 src/live.rs    the running app's own MCP endpoint (Unix socket) for its agent; `mcp --attach` bridge
+src/file_view.rs file history and blame of one file (opened from a diff header)
 src/conflict.rs  conflict-marker parsing and per-block resolution (pure, unit-tested)
 src/perf.rs    performance baseline test (scripts/perf.sh)
 src/log.rs     log file (failed operations, crashes with backtrace), only in the windowed app

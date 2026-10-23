@@ -2266,6 +2266,107 @@ mod tests {
         }
     }
 
+    /// With BB_SAVE_SHOTS set: the current screen as `name` in the temp dir.
+    fn save_shot(s: &mut Server, name: &str) {
+        let shot = s.call("screenshot", &json!({}));
+        if std::env::var_os("BB_SAVE_SHOTS").is_some()
+            && let Some(d) = shot["content"][0]["data"].as_str()
+        {
+            let png = base64::engine::general_purpose::STANDARD.decode(d).unwrap();
+            std::fs::write(std::env::temp_dir().join(name), png).unwrap();
+        }
+    }
+
+    /// From a file's diff: its history (a commit opens that commit's diff, Esc goes back) and
+    /// its blame (a line selects the commit that last changed it).
+    #[test]
+    fn file_history_and_blame() {
+        let mut s = Server::default();
+        let (_, out) = call(&mut s, "demo_repo", json!({}));
+        let work = out
+            .split(" at ")
+            .nth(1)
+            .unwrap()
+            .split(" (remote")
+            .next()
+            .unwrap()
+            .to_string();
+        let git = |args: &[&str]| {
+            let o = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&work)
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .output()
+                .unwrap();
+            assert!(
+                o.status.success(),
+                "{args:?}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+            String::from_utf8_lossy(&o.stdout).trim().to_string()
+        };
+        let mut text = String::new();
+        for (n, line) in ["first", "second", "third"].iter().enumerate() {
+            text += &format!("{line} line\n");
+            std::fs::write(format!("{work}/h.txt"), &text).unwrap();
+            git(&["add", "h.txt"]);
+            git(&["commit", "-qm", &format!("h step {}", n + 1)]);
+        }
+        let step1 = git(&["rev-parse", "HEAD~2"]);
+        std::fs::write(format!("{work}/h.txt"), text + "fourth line\n").unwrap();
+        call(&mut s, "key", json!({"key": "F5"}));
+        call(&mut s, "wait_idle", json!({}));
+        call(&mut s, "click", json!({"label": "WIP"}));
+        call(&mut s, "click", json!({"label": "h.txt"}));
+        call(&mut s, "wait_idle", json!({}));
+        let state = |s: &mut Server| -> Value {
+            let st: Value =
+                serde_json::from_str(&call(s, "state", json!({"commits": 0})).1).unwrap();
+            st["tabs"][0].clone()
+        };
+
+        let (err, out) = call(&mut s, "click", json!({"label": "File history"}));
+        assert!(!err, "{out}");
+        call(&mut s, "wait_idle", json!({}));
+        let t = state(&mut s);
+        assert_eq!(t["file_view"]["kind"], "History", "{t}");
+        assert_eq!(t["file_view"]["rows"], 3, "{t}");
+        assert!(t["diff_open"].is_null());
+        save_shot(&mut s, "bb-file-history.png");
+        let (err, out) = call(
+            &mut s,
+            "click",
+            json!({"label": format!("{} h step 1", &step1[..7])}),
+        );
+        assert!(!err, "{out}");
+        call(&mut s, "wait_idle", json!({}));
+        let t = state(&mut s);
+        assert!(t["diff_open"].as_str().unwrap().contains(&step1), "{t}");
+        assert_eq!(t["selected"], step1.as_str());
+        call(&mut s, "key", json!({"key": "Escape"}));
+        let t = state(&mut s);
+        assert!(
+            t["diff_open"].is_null() && t["file_view"]["kind"] == "History",
+            "{t}"
+        );
+
+        call(&mut s, "click", json!({"label": "Show Blame"}));
+        call(&mut s, "wait_idle", json!({}));
+        let t = state(&mut s);
+        assert_eq!(t["file_view"]["kind"], "Blame", "{t}");
+        assert_eq!(t["file_view"]["rows"], 4, "{t}");
+        let (_, w) = call(&mut s, "widgets", json!({"label": "Blame line"}));
+        assert!(w.contains("Blame line 4: 0000000 Not committed yet"), "{w}");
+        save_shot(&mut s, "bb-blame.png");
+        call(&mut s, "click", json!({"label": "Blame line 3"}));
+        call(&mut s, "click", json!({"label": "Blame line 1"}));
+        call(&mut s, "wait_idle", json!({}));
+        assert_eq!(state(&mut s)["selected"], step1.as_str());
+        call(&mut s, "key", json!({"key": "Escape"}));
+        assert!(state(&mut s)["file_view"].is_null());
+    }
+
     /// Part of a file: a whole hunk from its header, then one chosen line, into the index.
     #[test]
     fn stage_a_hunk_and_a_line() {

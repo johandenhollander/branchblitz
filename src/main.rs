@@ -7,6 +7,7 @@ mod color_scheme;
 mod colors;
 mod conflict;
 mod ds;
+mod file_view;
 mod fonts;
 mod git;
 mod graph;

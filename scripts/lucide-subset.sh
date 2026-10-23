@@ -9,7 +9,7 @@ archive archive-restore bot maximize-2 minimize-2 send-horizontal square arrow-d
 chevron-down chevron-right chevron-up chevrons-up-down circle circle-alert circle-check circle-dot cloud copy
 download folder folder-open house git-branch git-branch-plus git-commit-horizontal git-compare-arrows
 git-merge loader palette pencil plus sparkles info bug external-link refresh-cw rotate-ccw search settings star tag trash-2
-tree-pine triangle-alert undo-2 upload x lock lock-open
+tree-pine triangle-alert undo-2 upload x lock lock-open history user-round-pen
 "
 
 root=$(cd "$(dirname "$0")/.." && pwd)

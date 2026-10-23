@@ -241,6 +241,8 @@ enum MsgKind {
     PickedCloneParent(PathBuf),
     /// Find matches in the whole history: the query and the commits.
     FoundInHistory(String, Result<Vec<String>, String>),
+    /// File history or blame (its generation).
+    FileView(u64, Result<crate::file_view::Content, String>),
 }
 
 /// What the agent may do without asking the user.
@@ -267,6 +269,13 @@ pub enum Action {
     Select(Selection),
     ShowDiff(DiffTarget),
     CloseDiff,
+    /// Show the history or blame of a file (seen from commit `rev`, or HEAD / the working tree).
+    FileView {
+        kind: crate::file_view::Kind,
+        path: String,
+        rev: Option<String>,
+    },
+    CloseFileView,
     Jump(String),
     Input(InputKind),
     Copy(String),
@@ -369,6 +378,9 @@ pub struct RepoTab {
     /// Load further until this commit is loaded, then show it (a find match in older history).
     load_until: Option<String>,
     diff_gen: u64,
+    /// File history or blame, in place of the graph (a diff opened from it shows on top).
+    pub file_view: Option<crate::file_view::FileView>,
+    file_gen: u64,
     pub filter: String,
     pub find: Option<Find>,
     pub agent: crate::agent::Conversation,
@@ -630,6 +642,8 @@ impl BranchBlitz {
             details_error: None,
             diff: None,
             diff_gen: 0,
+            file_view: None,
+            file_gen: 0,
             filter: String::new(),
             find: None,
             diff_selection: Default::default(),
@@ -1220,6 +1234,13 @@ impl BranchBlitz {
                         *content = Some(r);
                     }
                 }
+                MsgKind::FileView(generation, r) => {
+                    if let Some(fv) = &mut self.tabs[i].file_view
+                        && fv.generation == generation
+                    {
+                        fv.content = Some(r);
+                    }
+                }
                 MsgKind::FoundInHistory(query, r) => {
                     let tab = &mut self.tabs[i];
                     if let (Some(f), Ok(found)) = (&mut tab.find, r)
@@ -1287,6 +1308,30 @@ impl BranchBlitz {
                     self.request_diff(i, target);
                 }
                 Action::CloseDiff => self.tabs[i].diff = None,
+                Action::FileView { kind, path, rev } => {
+                    let tab = &mut self.tabs[i];
+                    tab.diff = None;
+                    tab.file_gen += 1;
+                    let generation = tab.file_gen;
+                    tab.file_view = Some(crate::file_view::FileView {
+                        kind,
+                        path: path.clone(),
+                        rev: rev.clone(),
+                        content: None,
+                        generation,
+                    });
+                    let (tx, ctx, repo, id) =
+                        (self.tx.clone(), self.ctx.clone(), tab.path.clone(), tab.id);
+                    std::thread::spawn(move || {
+                        let r = crate::file_view::load(&repo, kind, &path, rev.as_deref());
+                        let _ = tx.send(Msg {
+                            tab: id,
+                            kind: MsgKind::FileView(generation, r),
+                        });
+                        ctx.request_repaint();
+                    });
+                }
+                Action::CloseFileView => self.tabs[i].file_view = None,
                 Action::Jump(sha) => {
                     let tab = &mut self.tabs[i];
                     if let Some(&row) = tab.row_of.get(&sha) {
@@ -2763,6 +2808,7 @@ impl BranchBlitz {
                         .map(|b| json!({"at": b.at, "name": b.name}))
                 );
                 v["diff_open"] = json!(t.diff.as_ref().map(|(d, _)| format!("{d:?}")));
+                v["file_view"] = json!(t.file_view.as_ref().map(|f| f.summary()));
                 let Some(d) = &t.data else { return v };
                 let refs = |kind: git::RefKind| -> Vec<serde_json::Value> {
                     d.refs
@@ -3099,6 +3145,8 @@ impl eframe::App for BranchBlitz {
                 }
                 if tab.diff.is_some() {
                     views::diff_view(ui, tab, &pal, &mut acts);
+                } else if tab.file_view.is_some() {
+                    crate::file_view::show(ui, tab, &pal, &mut acts);
                 } else {
                     views::graph_view(ui, tab, &pal, &mut acts);
                 }
@@ -4125,6 +4173,7 @@ mod glyph_check {
             include_str!("app.rs"),
             include_str!("views.rs"),
             include_str!("settings_view.rs"),
+            include_str!("file_view.rs"),
             include_str!("ds.rs"),
         ];
         let mut missing = String::new();

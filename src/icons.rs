@@ -55,6 +55,8 @@ pub const UPLOAD: &str = "\u{e19e}";
 pub const X: &str = "\u{e1b2}";
 pub const LOCK: &str = "\u{e10f}";
 pub const LOCK_OPEN: &str = "\u{e110}";
+pub const HISTORY: &str = "\u{e1f5}";
+pub const USER_ROUND_PEN: &str = "\u{e602}";
 
 #[cfg(test)]
 pub const ALL: &[&str] = &[
@@ -111,4 +113,6 @@ pub const ALL: &[&str] = &[
     X,
     LOCK,
     LOCK_OPEN,
+    HISTORY,
+    USER_ROUND_PEN,
 ];

@@ -757,6 +757,131 @@ pub fn search_commits(repo: &Path, query: &str, max: usize) -> Result<Vec<String
     Ok(found)
 }
 
+/// A commit that changed a file, for its history: `path` is the file's name in that commit
+/// (it follows renames).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FileCommit {
+    pub sha: String,
+    pub author: String,
+    pub time: i64,
+    pub subject: String,
+    pub path: String,
+}
+
+/// The commits that changed `path`, newest first, from `rev` (HEAD when `None`), following
+/// renames; at most `max`.
+pub fn file_history(
+    repo: &Path,
+    path: &str,
+    rev: Option<&str>,
+    max: usize,
+) -> Result<Vec<FileCommit>, String> {
+    let n = format!("-n{max}");
+    let mut args = vec![
+        "log",
+        "--follow",
+        "--name-only",
+        "--format=%x1e%H%x1f%an%x1f%ct%x1f%s",
+        n.as_str(),
+    ];
+    if let Some(rev) = rev {
+        if rev.starts_with('-') {
+            return Err(format!("Invalid revision {rev}"));
+        }
+        args.push(rev);
+    }
+    args.extend(["--", path]);
+    let out = git(repo, &args)?;
+    Ok(out
+        .split('\x1e')
+        .filter_map(|rec| {
+            let (head, files) = rec.split_once('\n').unwrap_or((rec, ""));
+            let mut f = head.splitn(4, '\x1f');
+            let sha = f.next()?.to_string();
+            if sha.is_empty() {
+                return None;
+            }
+            let author = f.next()?.to_string();
+            let time = f.next()?.parse().unwrap_or(0);
+            let subject = f.next().unwrap_or("").to_string();
+            // A merge lists no files: it keeps the name of the commit after it.
+            let file = files.lines().find(|l| !l.is_empty()).unwrap_or("");
+            Some(FileCommit {
+                sha,
+                author,
+                time,
+                subject,
+                path: file.to_string(),
+            })
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .scan(path.to_string(), |name, mut c| {
+            if c.path.is_empty() {
+                c.path = name.clone();
+            } else {
+                *name = c.path.clone();
+            }
+            Some(c)
+        })
+        .collect())
+}
+
+/// One line of `git blame`: the commit that last changed it (all zeros when not committed yet).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BlameLine {
+    pub sha: String,
+    pub author: String,
+    pub time: i64,
+    pub summary: String,
+    pub text: String,
+}
+
+/// Who last changed each line of `path`: in commit `rev`, or in the working tree when `None`.
+pub fn blame(repo: &Path, path: &str, rev: Option<&str>) -> Result<Vec<BlameLine>, String> {
+    let mut args = vec!["blame", "--porcelain"];
+    if let Some(rev) = rev {
+        if rev.starts_with('-') {
+            return Err(format!("Invalid revision {rev}"));
+        }
+        args.push(rev);
+    }
+    args.extend(["--", path]);
+    let out = git(repo, &args)?;
+    // Porcelain: a header per line ("sha orig final [count]"), the commit's fields only the first
+    // time it appears, then the line itself after a tab.
+    let mut info: HashMap<String, (String, i64, String)> = HashMap::new();
+    let mut lines = Vec::new();
+    let mut sha = String::new();
+    for l in out.lines() {
+        if let Some(text) = l.strip_prefix('\t') {
+            let (author, time, mut summary) = info.get(&sha).cloned().unwrap_or_default();
+            if sha.bytes().all(|b| b == b'0') {
+                summary = "Not committed yet".into();
+            }
+            lines.push(BlameLine {
+                sha: sha.clone(),
+                author,
+                time,
+                summary,
+                text: text.to_string(),
+            });
+        } else if let Some(v) = l.strip_prefix("author ") {
+            info.entry(sha.clone()).or_default().0 = v.to_string();
+        } else if let Some(v) = l.strip_prefix("author-time ") {
+            info.entry(sha.clone()).or_default().1 = v.parse().unwrap_or(0);
+        } else if let Some(v) = l.strip_prefix("summary ") {
+            info.entry(sha.clone()).or_default().2 = v.to_string();
+        } else if let Some(h) = l.split(' ').next()
+            && h.len() >= 40
+            && h.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            sha = h.to_string();
+        }
+    }
+    Ok(lines)
+}
+
 fn load_commits(repo: &Path, limit: usize, has_head: bool) -> Result<Vec<Commit>, String> {
     let n = format!("-n{limit}");
     let mut args = vec![
@@ -1832,6 +1957,62 @@ mod tests {
             search_commits(&dir, "--all", 100).unwrap().is_empty(),
             "an option is text"
         );
+    }
+
+    #[test]
+    fn file_history_follows_renames_and_blame_names_each_line() {
+        let dir = repo("history");
+        std::fs::write(dir.join("old.txt"), "one\ntwo\n").unwrap();
+        git(&dir, &["add", "old.txt"]).unwrap();
+        git(&dir, &["commit", "-qm", "Add old"]).unwrap();
+        std::fs::write(dir.join("other.txt"), "x\n").unwrap();
+        git(&dir, &["add", "other.txt"]).unwrap();
+        git(&dir, &["commit", "-qm", "Unrelated"]).unwrap();
+        git(&dir, &["mv", "old.txt", "new.txt"]).unwrap();
+        git(&dir, &["commit", "-qm", "Rename"]).unwrap();
+        std::fs::write(dir.join("new.txt"), "one\nTWO\nthree\n").unwrap();
+        git(&dir, &["commit", "-qam", "Change"]).unwrap();
+
+        let h = file_history(&dir, "new.txt", None, 100).unwrap();
+        let got: Vec<(&str, &str)> = h
+            .iter()
+            .map(|c| (c.subject.as_str(), c.path.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("Change", "new.txt"),
+                ("Rename", "new.txt"),
+                ("Add old", "old.txt")
+            ]
+        );
+        // From an older commit: only what came before it.
+        let at = h[1].sha.clone();
+        assert_eq!(
+            file_history(&dir, "new.txt", Some(&at), 100).unwrap().len(),
+            2
+        );
+
+        std::fs::write(dir.join("new.txt"), "one\nTWO\nthree\nfour\n").unwrap();
+        let b = blame(&dir, "new.txt", None).unwrap();
+        let got: Vec<(&str, &str)> = b
+            .iter()
+            .map(|l| (l.summary.as_str(), l.text.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("Add old", "one"),
+                ("Change", "TWO"),
+                ("Change", "three"),
+                ("Not committed yet", "four")
+            ]
+        );
+        assert!(b[3].sha.bytes().all(|c| c == b'0'));
+        assert_eq!(b[0].author, b[1].author);
+        let b = blame(&dir, "new.txt", Some(&at)).unwrap();
+        assert_eq!(b.len(), 2);
+        assert!(blame(&dir, "new.txt", Some("--all")).is_err());
     }
 
     #[test]

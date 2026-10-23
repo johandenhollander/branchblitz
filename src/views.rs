@@ -3564,6 +3564,7 @@ pub fn diff_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<A
                     {
                         acts.push(Action::CloseDiff);
                     }
+                    crate::file_view::diff_buttons(ui, target, status, pal, acts);
                     if partial && !selection.is_empty() {
                         let n = selection.len();
                         let label = format!("{verb} {n} line{}", if n == 1 { "" } else { "s" });
