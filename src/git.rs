@@ -341,6 +341,8 @@ pub struct RepoData {
     /// The worktrees of this repository (main first, this one included) when it has more
     /// than one. Git refuses to check out a branch that another worktree has.
     pub worktrees: Vec<Worktree>,
+    /// How many commits were asked for: fewer in `commits` means that is the whole history.
+    pub limit: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -546,6 +548,7 @@ pub fn load(repo: &Path, limit: usize) -> Result<RepoData, String> {
         flow,
         remote_tags: None,
         worktrees,
+        limit,
     })
 }
 
@@ -744,12 +747,27 @@ pub fn search_commits(repo: &Path, query: &str, max: usize) -> Result<Vec<String
         args.push("HEAD");
     }
     let mut found: Vec<String> = git(repo, &args)?.lines().map(str::to_string).collect();
-    // A hash (prefix): the commit it names, if any.
+    // A hash (prefix): the commit it names, if the graph can show it (on a branch, tag or HEAD;
+    // not one only the reflog or a stash still has).
     if q.len() >= 4 && q.bytes().all(|b| b.is_ascii_hexdigit()) {
         let rev = format!("{q}^{{commit}}");
         if let Ok(sha) = git(repo, &["rev-parse", "-q", "--verify", &rev]) {
             let sha = sha.trim().to_string();
-            if !found.contains(&sha) {
+            let shown = (head && git(repo, &["merge-base", "--is-ancestor", &sha, "HEAD"]).is_ok())
+                || git(
+                    repo,
+                    &[
+                        "for-each-ref",
+                        "--count=1",
+                        "--format=%(refname)",
+                        &format!("--contains={sha}"),
+                        "refs/heads",
+                        "refs/remotes",
+                        "refs/tags",
+                    ],
+                )
+                .is_ok_and(|r| !r.trim().is_empty());
+            if shown && !found.contains(&sha) {
                 found.insert(0, sha);
             }
         }
@@ -1473,12 +1491,19 @@ impl Op {
             }
             Op::StageAll => g(&["add", "-A"]),
             Op::ApplyPatch { patch, unstage } => {
-                // Through a file: the git layer keeps stdin closed.
+                // Through a file (the git layer keeps stdin closed), in the repository's own git
+                // directory rather than a shared temp dir; a new file, never through a symlink.
                 static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
                 let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let file = std::env::temp_dir()
+                let dir = g(&["rev-parse", "--absolute-git-dir"])?;
+                let file = Path::new(dir.trim())
                     .join(format!("branchblitz-{}-{n}.patch", std::process::id()));
-                std::fs::write(&file, patch).map_err(|e| e.to_string())?;
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&file)
+                    .and_then(|mut f| std::io::Write::write_all(&mut f, patch.as_bytes()))
+                    .map_err(|e| e.to_string())?;
                 let path = file
                     .to_str()
                     .ok_or("temp path is not valid text")?
@@ -1956,6 +1981,15 @@ mod tests {
         assert!(
             search_commits(&dir, "--all", 100).unwrap().is_empty(),
             "an option is text"
+        );
+        // A commit only the reflog still has is not in the graph, so not a match.
+        git(&dir, &["commit", "-q", "--allow-empty", "-m", "dropped"]).unwrap();
+        let dropped = git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        git(&dir, &["reset", "-q", "--hard", "HEAD~1"]).unwrap();
+        assert!(
+            search_commits(&dir, &dropped[..10], 100)
+                .unwrap()
+                .is_empty()
         );
     }
 

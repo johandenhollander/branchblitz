@@ -112,11 +112,14 @@ impl BranchBlitz {
                     self.load_more(i);
                 }
                 Action::FindHistory(query) => {
-                    let tab = &self.tabs[i];
+                    let tab = &mut self.tabs[i];
+                    if let Some(f) = &mut tab.find {
+                        f.searching += 1;
+                    }
                     let (tx, ctx, path, id) =
                         (self.tx.clone(), self.ctx.clone(), tab.path.clone(), tab.id);
                     std::thread::spawn(move || {
-                        let r = git::search_commits(&path, &query, 500);
+                        let r = git::search_commits(&path, &query, FIND_HISTORY_MAX);
                         let _ = tx.send(Msg {
                             tab: id,
                             kind: MsgKind::FoundInHistory(query, r),

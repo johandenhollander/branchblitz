@@ -92,13 +92,19 @@ pub fn diff_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<A
         Some(Ok(t)) => t.as_str(),
         _ => "",
     };
-    let partial = matches!(
-        target,
-        DiffTarget::Unstaged {
-            untracked: false,
-            ..
-        } | DiffTarget::Staged { .. }
-    );
+    // Not for a whole new or deleted file: git can only take that as a whole.
+    let whole_file = raw
+        .lines()
+        .take_while(|l| !l.starts_with("@@"))
+        .any(|l| l.starts_with("new file mode") || l.starts_with("deleted file mode"));
+    let partial = !whole_file
+        && matches!(
+            target,
+            DiffTarget::Unstaged {
+                untracked: false,
+                ..
+            } | DiffTarget::Staged { .. }
+        );
     let unstage = matches!(target, DiffTarget::Staged { .. });
     let verb = if unstage { "Unstage" } else { "Stage" };
     // Per parsed line: its hunk and its index in that hunk's body (as `git::partial_patch` counts).

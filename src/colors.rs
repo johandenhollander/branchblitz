@@ -327,6 +327,7 @@ mod tests {
         // main: a - m (merges deleted hotfix/h: h1); develop: d on top of a; origin/main at m.
         let data = RepoData {
             worktrees: Default::default(),
+            limit: 0,
             head_branch: Some("develop".into()),
             head_sha: Some("d".into()),
             refs: vec![
@@ -369,6 +370,7 @@ mod tests {
     fn git_flow_names_get_the_colour_of_their_role() {
         let data = RepoData {
             worktrees: Default::default(),
+            limit: 0,
             head_branch: None,
             head_sha: None,
             refs: vec![

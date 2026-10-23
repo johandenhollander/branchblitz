@@ -20,6 +20,8 @@ use crate::views;
 use crate::{ds, icons};
 
 const SETTINGS_KEY: &str = "branchblitz.settings";
+/// At most this many matches of a find in the whole history.
+pub const FIND_HISTORY_MAX: usize = 500;
 
 mod actions;
 mod agent_tools;
@@ -274,6 +276,10 @@ pub struct Find {
     pub jump: bool,
     /// Matches in the whole history (query, newest first), from git: some may not be loaded.
     pub older: Option<(String, Vec<String>)>,
+    /// When to search the whole history (UI time): once typing pauses.
+    pub search_at: Option<f64>,
+    /// Searches of the whole history still running.
+    pub searching: u32,
 }
 
 pub struct NewBranch {

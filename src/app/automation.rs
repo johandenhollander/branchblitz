@@ -53,6 +53,8 @@ impl BranchBlitz {
                     && t.details.is_none()
                     && t.details_error.is_none())
                 || matches!(t.diff, Some((_, None)))
+                || t.file_view.as_ref().is_some_and(|f| f.content.is_none())
+                || t.find.as_ref().is_some_and(|f| f.search_at.is_some() || f.searching > 0)
                 // An agent answering. (The agent's own tool calls wait with `tab_busy` instead.)
                 || t.agent.busy()
             })

@@ -2,6 +2,8 @@
 //! History lists the commits that changed the file (click one for its diff); blame shows who last
 //! changed each line (click a line for its commit).
 
+use std::collections::HashMap;
+
 use eframe::egui::{self, Align2, Color32, FontId, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
 
 use crate::app::{Action, RepoTab, Selection};
@@ -185,8 +187,17 @@ pub fn show(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<Action
             ui.add_space(16.0);
             ui.colored_label(pal.danger, e);
         }
-        Some(Ok(Content::History(h))) => history(ui, h, selected, pal, acts),
-        Some(Ok(Content::Blame(b))) => blame(ui, b, selected, pal, acts),
+        Some(Ok(Content::History(h))) => history(ui, h, selected, &tab.row_of, pal, acts),
+        Some(Ok(Content::Blame(b))) => blame(ui, b, selected, &tab.row_of, pal, acts),
+    }
+}
+
+/// Selects commit `sha` in the graph, first loading older commits when it is not loaded yet.
+fn select(sha: &str, row_of: &HashMap<String, usize>) -> Action {
+    if row_of.contains_key(sha) {
+        Action::Jump(sha.to_string())
+    } else {
+        Action::LoadUntil(sha.to_string())
     }
 }
 
@@ -195,6 +206,7 @@ fn history(
     ui: &mut Ui,
     h: &[FileCommit],
     selected: Option<&str>,
+    row_of: &HashMap<String, usize>,
     pal: &Palette,
     acts: &mut Vec<Action>,
 ) {
@@ -259,7 +271,7 @@ fn history(
                     resp.clone().on_hover_text(format!("As {}", c.path));
                 }
                 if resp.clicked() {
-                    acts.push(Action::Jump(c.sha.clone()));
+                    acts.push(select(&c.sha, row_of));
                     acts.push(Action::ShowDiff(DiffTarget::Commit {
                         sha: c.sha.clone(),
                         path: c.path.clone(),
@@ -275,6 +287,7 @@ fn blame(
     ui: &mut Ui,
     lines: &[BlameLine],
     selected: Option<&str>,
+    row_of: &HashMap<String, usize>,
     pal: &Palette,
     acts: &mut Vec<Action>,
 ) {
@@ -323,7 +336,7 @@ fn blame(
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                     }
                     if resp.clicked() {
-                        acts.push(Action::Jump(l.sha.clone()));
+                        acts.push(select(&l.sha, row_of));
                     }
                 }
                 let p = ui.painter();

@@ -147,6 +147,9 @@ fn commit_matches(c: &crate::git::Commit, query: &str) -> bool {
     c.sha.starts_with(query) || c.subject.to_lowercase().contains(query)
 }
 
+/// Seconds of no typing before find searches the whole history (a git process per search).
+const SEARCH_DELAY: f64 = 0.3;
+
 /// The find bar, floating at the top right of the graph: field, "n of m", previous/next and
 /// close. Enter goes to the next match, Shift+Enter to the previous; typing jumps to the first
 /// match from the selection on. True when it should close.
@@ -185,6 +188,16 @@ fn find_bar(
             acts.push(Action::Jump(data.commits[r].sha.clone()));
         }
     };
+    if let Some(at) = f.search_at {
+        let now = ui.input(|i| i.time);
+        if now >= at {
+            f.search_at = None;
+            acts.push(Action::FindHistory(f.query.trim().to_string()));
+        } else {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_secs_f64(at - now));
+        }
+    }
     if std::mem::take(&mut f.jump) && !hits.is_empty() {
         let from = hits
             .iter()
@@ -229,11 +242,9 @@ fn find_bar(
                             field.request_focus();
                         } else if field.changed() {
                             f.jump = true;
-                            f.older = None;
                             let q = f.query.trim();
-                            if q.chars().count() >= 2 {
-                                acts.push(Action::FindHistory(q.to_string()));
-                            }
+                            f.search_at = (q.chars().count() >= 2)
+                                .then(|| ui.input(|i| i.time) + SEARCH_DELAY);
                             ui.ctx().request_repaint();
                         }
                         if (field.has_focus() || field.lost_focus())
@@ -293,19 +304,23 @@ fn find_bar(
                         }
                     });
                     // Matches in commits that are not loaded yet: load until the first one.
-                    let older: Vec<&String> = f
+                    let current = f
                         .older
                         .as_ref()
-                        .filter(|(q, _)| q.to_lowercase() == f.query.trim().to_lowercase())
+                        .filter(|(q, _)| q.to_lowercase() == f.query.trim().to_lowercase());
+                    // Git stopped at the maximum: there may be more than it found.
+                    let capped =
+                        current.is_some_and(|(_, shas)| shas.len() >= crate::app::FIND_HISTORY_MAX);
+                    let older: Vec<&String> = current
                         .map(|(_, shas)| shas.iter().filter(|s| !row_of.contains_key(*s)).collect())
                         .unwrap_or_default();
                     if let Some(first) = older.first() {
                         ui.horizontal(|ui| {
-                            let text = match older.len() {
-                                1 => "1 more in older history".to_string(),
-                                n if n >= 500 => format!("{n}+ more in older history"),
-                                n => format!("{n} more in older history"),
-                            };
+                            let n = older.len();
+                            let text = format!(
+                                "{n}{} more in older history",
+                                if capped { "+" } else { "" }
+                            );
                             let g = ui.painter().layout_job(ds::text_job(
                                 &text,
                                 12.0,

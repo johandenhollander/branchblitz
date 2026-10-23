@@ -55,8 +55,10 @@ impl BranchBlitz {
                         .map(|(n, c)| (c.sha.clone(), n))
                         .collect();
                     tab.load_error = None;
-                    tab.loading_more = false;
-                    let loaded_all = data.commits.len() < tab.limit.load(Ordering::Relaxed);
+                    // A load that started before the limit grew: the larger one is still coming.
+                    let outdated = data.limit < tab.limit.load(Ordering::Relaxed);
+                    tab.loading_more = outdated;
+                    let loaded_all = data.commits.len() < data.limit;
                     let dirty = data.status.is_dirty() || data.state != RepoState::Clean;
                     tab.data = Some(data);
                     if tab.selected == Selection::Wip && !dirty {
@@ -97,7 +99,7 @@ impl BranchBlitz {
                             self.apply(i, vec![Action::Jump(sha)]);
                         } else if loaded_all {
                             self.tabs[i].load_until = None;
-                        } else {
+                        } else if !outdated {
                             self.load_more(i);
                         }
                     }
@@ -111,6 +113,8 @@ impl BranchBlitz {
                     tab.loads_done = tab.loads_done.max(generation);
                     tab.tags_pending = false;
                     tab.load_error = Some(e);
+                    tab.loading_more = false;
+                    tab.load_until = None;
                 }
                 MsgKind::OpDone { op, quiet, result } => {
                     let tab = &mut self.tabs[i];
@@ -255,10 +259,13 @@ impl BranchBlitz {
                 }
                 MsgKind::FoundInHistory(query, r) => {
                     let tab = &mut self.tabs[i];
-                    if let (Some(f), Ok(found)) = (&mut tab.find, r)
-                        && f.query.trim().to_lowercase() == query.to_lowercase()
-                    {
-                        f.older = Some((query, found));
+                    if let Some(f) = &mut tab.find {
+                        f.searching = f.searching.saturating_sub(1);
+                        if let Ok(found) = r
+                            && f.query.trim().to_lowercase() == query.to_lowercase()
+                        {
+                            f.older = Some((query, found));
+                        }
                     }
                 }
                 MsgKind::Agent(event) => {
