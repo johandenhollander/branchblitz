@@ -15,8 +15,11 @@ Fast desktop git client in Rust (eframe/egui 0.37). Focus: see every local/remot
 
 ```
 src/main.rs    viewport + run_native
-src/app.rs     App state, tabs, worker threads, modals, toolbar, settings; ui tests at bottom
-src/views.rs   sidebar, graph view, context menus, details/WIP/diff panels
+src/app/       App state and tabs (mod.rs); frame loop, actions, messages, worker, chrome (tab bar,
+               toolbar, status bar, welcome), modals, settings, notices, agent_tools, automation
+               (MCP/test hooks), tests (render + glyph checks)
+src/views/     panels drawn per frame: sidebar, graph (+ find bar), menus, details (commit/WIP),
+               diff, conflict_view, banner (state/alert bars), agent_panel
 src/git.rs     git CLI layer: load(), Op enum, diff; integration tests against temp repos
 src/graph.rs   lane layout (pure, unit-tested)
 src/theme.rs   design system tokens (Palette), themes, egui style
@@ -64,7 +67,7 @@ into a test in `mcp::tests` or `render_tests`. Never point it at the user's real
 
 ## Anti-patterns (update when mistakes found)
 
-- Don't use emoji or Unicode symbols as icons → use `icons::*` (Lucide); add new ones in `scripts/lucide-subset.sh`. Other glyphs must exist in the bundled fonts (`glyph_check` guards app.rs/views.rs/settings_view.rs/ds.rs; Inter has ↑↓…—·×, not →).
+- Don't use emoji or Unicode symbols as icons → use `icons::*` (Lucide); add new ones in `scripts/lucide-subset.sh`. Other glyphs must exist in the bundled fonts (`glyph_check` guards app/, views/, settings_view.rs, file_view.rs, ds.rs; Inter has ↑↓…—·×, not →).
 - Don't hard-code colours, sizes or radii in UI code → take them from `Palette` / `theme::RADIUS_*` / `ds::CONTROL_*`; the source is the BranchBlitz design system artifact (brain: [[design-system]]).
 - Don't paint a widget without `widget_info` → the MCP server and kittest find widgets by accessible label; keep long descriptions (e.g. "Merge x into y") as the label when the visible text is shortened.
 - Don't pass user/remote-controlled names to git without `Op::names()` guard → names starting with `-` become options.
