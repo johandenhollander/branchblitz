@@ -265,6 +265,7 @@ impl eframe::App for BranchBlitz {
             }
         }
 
+        views::drag_ghost(&ctx, &pal);
         self.apply(i, acts);
         self.show_modal(&ctx);
     }

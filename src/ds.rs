@@ -645,7 +645,19 @@ pub fn paint_more(painter: &Painter, left_center: Pos2, n: usize, pal: &Palette)
 /// A full-width clickable row of `row-height` with hover and selected fills; returns the
 /// response and the rect to paint into. `label` is its accessible name.
 pub fn row(ui: &mut Ui, pal: &Palette, height: f32, selected: bool, label: &str) -> Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
+    row_sense(ui, pal, height, selected, label, Sense::click())
+}
+
+/// `row`, sensing `sense` (e.g. drags as well).
+pub fn row_sense(
+    ui: &mut Ui,
+    pal: &Palette,
+    height: f32,
+    selected: bool,
+    label: &str,
+    sense: Sense,
+) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), height), sense);
     resp.widget_info(|| WidgetInfo::selected(Role::Button, true, selected, label));
     let fill = if selected {
         pal.selected

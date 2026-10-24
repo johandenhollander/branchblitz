@@ -15,6 +15,9 @@ It has an AI agent built in that can operate the app for you, and you see every 
 - **Right-click any branch** (sidebar or graph label): merge into the current branch, rebase, check out,
   fast-forward, create a branch or tag, rename, delete (locally or on the remote), push.
 - **Right-click a commit**: branch or tag here, check out, cherry-pick, revert, reset (soft/mixed/hard).
+- **Drag and drop**: drag a commit onto a local branch (in the graph or the sidebar) to cherry-pick it
+  there, or a branch onto another to merge it into that one. It asks first, and checks the branch out first
+  when it is not the current one (not over uncommitted changes).
 - **Find commits** by message or hash (`Ctrl F`).
 - **Fetch and pull**: fetch on opening and switching tabs, optional periodic auto-fetch; one Pull button
   whose default (fetch all, merge, fast-forward only, rebase) is remembered per repository.
@@ -105,7 +108,7 @@ Other clients (`claude_desktop_config.json` or equivalent):
 ```
 
 Tools: `open_repo`, `demo_repo` (throwaway repository under `/tmp`), `state`, `screenshot`, `widgets`,
-`click`, `hover`, `type_text`, `key`, `scroll`, `resize`, `set_theme`, `wait_idle`.
+`click`, `hover`, `drag`, `type_text`, `key`, `scroll`, `resize`, `set_theme`, `wait_idle`.
 
 The assistant runs real git commands on the repositories it opens, including pull, push and merges.
 Destructive actions ask first in a red alert bar, whose button only works when the tool call passes

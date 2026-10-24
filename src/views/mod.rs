@@ -28,6 +28,7 @@ mod banner;
 mod conflict_view;
 mod details;
 mod diff;
+mod dnd;
 mod graph;
 mod menus;
 mod sidebar;
@@ -42,6 +43,7 @@ pub use agent_panel::{AGENT_BAR_H, AgentChoice, agent_bar, agent_panel, agent_sp
 pub use banner::{alert_bar, state_banner};
 pub use details::details;
 pub use diff::diff_view;
+pub use dnd::drag_ghost;
 pub use graph::graph_view;
 pub use menus::ref_menu;
 pub(crate) use sidebar::checkout_action;

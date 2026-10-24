@@ -65,6 +65,40 @@ mod render_tests {
         }
     }
 
+    /// Mid-drag: a commit held over the local `develop` branch (outlined, the label says what a
+    /// drop does), then over nothing. Released outside, so the repo is unchanged.
+    #[test]
+    #[ignore]
+    fn render_drag() {
+        use egui_kittest::kittest::Queryable;
+        let Some(mut h) = harness(egui::Theme::Dark) else {
+            return;
+        };
+        let from = h.get_by_label("PROJ-610 - Fix date format").rect().center();
+        let to = h
+            .get_all_by_label("develop")
+            .min_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+            .expect("develop")
+            .rect()
+            .center();
+        h.hover_at(from);
+        h.step();
+        h.drag_at(from);
+        h.step();
+        for k in 1..=8 {
+            h.hover_at(from + (to - from) * (k as f32 / 8.0));
+            h.step();
+        }
+        h.run_steps(2);
+        save(&mut h, "drag-target");
+        h.hover_at(from + egui::vec2(0.0, 60.0));
+        h.run_steps(2);
+        save(&mut h, "drag");
+        h.drop_at(from + egui::vec2(0.0, 60.0));
+        h.run_steps(2);
+        assert!(h.state().tabs[0].alert.is_none());
+    }
+
     /// Right-click the remote `develop` branch and merge it into the current branch.
     #[test]
     #[ignore]

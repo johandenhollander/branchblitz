@@ -1303,6 +1303,13 @@ pub enum Op {
         content: String,
         expected: String,
     },
+    /// Checks out local branch `branch` (when it is not checked out already), then runs `then`:
+    /// a commit or branch dropped on that branch. Refuses with uncommitted changes, which the
+    /// checkout would otherwise carry along.
+    Onto {
+        branch: String,
+        then: Box<Op>,
+    },
 }
 
 impl Op {
@@ -1354,6 +1361,11 @@ impl Op {
             Op::LockWorktree { lock: true, .. } => "Lock worktree".into(),
             Op::LockWorktree { lock: false, .. } => "Unlock worktree".into(),
             Op::ResolveFile { path, .. } => format!("Resolve {path}"),
+            Op::Onto { branch, then } => match &**then {
+                Op::CherryPick(s) => format!("Cherry-pick {} onto {branch}", short(s)),
+                Op::Merge { what, .. } => format!("Merge {what} into {branch}"),
+                other => other.label(),
+            },
         }
     }
 
@@ -1384,6 +1396,11 @@ impl Op {
                 v
             }
             Op::LockWorktree { path, .. } => vec![path],
+            Op::Onto { branch, then } => {
+                let mut v = vec![branch.as_str()];
+                v.extend(then.names());
+                v
+            }
             _ => vec![],
         }
     }
@@ -1591,6 +1608,31 @@ impl Op {
                 g(&["worktree", if *lock { "lock" } else { "unlock" }, path])
             }
             Op::ContinueMerge => g(&["commit", "--no-edit"]),
+            Op::Onto { branch, then } => {
+                if load_state(repo) != RepoState::Clean {
+                    return Err("Finish or abort the operation in progress first".into());
+                }
+                let head = g(&["symbolic-ref", "-q", "--short", "HEAD"])
+                    .map_err(|_| "HEAD is detached; check out a branch first".to_string())?;
+                let mut out = String::new();
+                if head.trim() != branch {
+                    if !g(&["status", "--porcelain", "--untracked-files=no"])?
+                        .trim()
+                        .is_empty()
+                    {
+                        return Err(format!(
+                            "Commit or stash your changes before switching to {branch}"
+                        ));
+                    }
+                    if let Op::CherryPick(sha) = &**then
+                        && g(&["merge-base", "--is-ancestor", sha, branch]).is_ok()
+                    {
+                        return Err(format!("{} is already in {branch}", short(sha)));
+                    }
+                    out = g(&["switch", branch])?;
+                }
+                Ok(out + &then.run(repo, data)?)
+            }
         }
     }
 }
@@ -2059,6 +2101,73 @@ mod tests {
         assert_eq!(flow.canonical("dev"), "develop");
         assert_eq!(flow.canonical("feat-x"), "feature/x");
         assert_eq!(flow.canonical("other"), "other");
+    }
+
+    #[test]
+    fn onto_checks_out_the_branch_first() {
+        let dir = repo("onto");
+        let head = |d: &Path| git(d, &["symbolic-ref", "--short", "HEAD"]).unwrap();
+        git(&dir, &["branch", "target"]).unwrap();
+        git(&dir, &["switch", "-qc", "feature"]).unwrap();
+        std::fs::write(dir.join("b.txt"), "b\n").unwrap();
+        git(&dir, &["add", "b.txt"]).unwrap();
+        git(&dir, &["commit", "-qm", "pick me"]).unwrap();
+        let pick = git(&dir, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+
+        // Uncommitted changes: refused before anything moves.
+        std::fs::write(dir.join("a.txt"), "dirty\n").unwrap();
+        let onto = |then: Op| Op::Onto {
+            branch: "target".into(),
+            then: Box::new(then),
+        };
+        let err = onto(Op::CherryPick(pick.clone()))
+            .run(&dir, None)
+            .unwrap_err();
+        assert!(err.contains("stash"), "{err}");
+        assert_eq!(head(&dir).trim(), "feature");
+        git(&dir, &["checkout", "--", "a.txt"]).unwrap();
+
+        onto(Op::CherryPick(pick.clone())).run(&dir, None).unwrap();
+        assert_eq!(head(&dir).trim(), "target");
+        let subject = git(&dir, &["log", "-1", "--format=%s"]).unwrap();
+        assert_eq!(subject.trim(), "pick me");
+
+        // Already on the branch: just merges.
+        git(&dir, &["reset", "-q", "--hard", "HEAD~1"]).unwrap();
+        onto(Op::Merge {
+            what: "feature".into(),
+            mode: MergeMode::Default,
+        })
+        .run(&dir, None)
+        .unwrap();
+        assert_eq!(head(&dir).trim(), "target");
+        let tip = git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        assert_eq!(tip.trim(), pick, "fast-forwarded to feature");
+        git(&dir, &["switch", "-q", "feature"]).unwrap();
+        let err = onto(Op::CherryPick(pick.clone()))
+            .run(&dir, None)
+            .unwrap_err();
+        assert!(err.contains("already in target"), "{err}");
+        assert_eq!(head(&dir).trim(), "feature");
+        git(&dir, &["switch", "-q", "--detach"]).unwrap();
+        let err = onto(Op::CherryPick(pick.clone()))
+            .run(&dir, None)
+            .unwrap_err();
+        assert!(err.contains("detached"), "{err}");
+        git(&dir, &["switch", "-q", "target"]).unwrap();
+        assert!(
+            onto(Op::Merge {
+                what: "--evil".into(),
+                mode: MergeMode::Default,
+            })
+            .run(&dir, None)
+            .unwrap_err()
+            .contains("Refusing")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -715,11 +715,16 @@ pub fn graph_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<
             acts.push(Action::LoadMore);
         }
         for row in range {
-            let (rect, resp) =
-                ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
+            let is_wip = has_wip && row == 0;
+            // Commits drag onto a branch to cherry-pick them there.
+            let sense = if is_wip {
+                Sense::click()
+            } else {
+                Sense::click_and_drag()
+            };
+            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), sense);
             let painter = ui.painter_at(rect);
             let yc = rect.center().y;
-            let is_wip = has_wip && row == 0;
             let is_sel = if is_wip {
                 *selected == Selection::Wip
             } else {
@@ -919,7 +924,7 @@ pub fn graph_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<
                         pr,
                         ui.scope_id()
                             .with(("pill", &c.sha, &pill.text, &pill.prefix)),
-                        Sense::click(),
+                        Sense::click_and_drag(),
                     );
                     presp.widget_info(|| {
                         egui::WidgetInfo::labeled(egui::Role::Button, true, pill.full_names(data))
@@ -944,6 +949,17 @@ pub fn graph_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<
                         acts.push(Action::Select(Selection::Commit(c.sha.clone())));
                     }
                     presp.context_menu(|ui| pill_menu(ui, pal, pill, data, lane, acts));
+                    let first = &data.refs[pill.refs[0]];
+                    if first.kind != RefKind::Tag {
+                        dnd::source(&presp, || dnd::Drag::Branch {
+                            name: first.name.clone(),
+                            spec: data.spec(first),
+                            target: first.target.clone(),
+                        });
+                    }
+                    if first.kind == RefKind::Local {
+                        dnd::target(ui, &presp, &first.name, data, pal, acts);
+                    }
                 }
                 if more > 0 {
                     let r = ds::paint_more(&painter, pos2(x, yc), more, pal);
@@ -1063,6 +1079,11 @@ pub fn graph_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<
                 acts.push(Action::Select(Selection::Commit(c.sha.clone())));
             }
             resp.context_menu(|ui| commit_menu(ui, pal, &c.sha, &c.subject, data, acts));
+            dnd::source(&resp, || dnd::Drag::Commit {
+                sha: c.sha.clone(),
+                subject: c.subject.clone(),
+                merge: c.parents.len() > 1,
+            });
         }
     });
     let off = out.state.clamped_offset().y;

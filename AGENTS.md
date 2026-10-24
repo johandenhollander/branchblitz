@@ -65,7 +65,7 @@ commit in a worktree (`git worktree add /tmp/bbbase <commit>`, `BB_PERF=/tmp/bbp
 ## See the app (MCP)
 
 `.mcp.json` registers `branchblitz` (`cargo run -- mcp`). Use it to check UI changes like a user: `demo_repo` →
-`screenshot` → `widgets` → `click`/`type_text`/`key` → `wait_idle` → `screenshot`/`state`. The server runs the
+`screenshot` → `widgets` → `click`/`drag`/`type_text`/`key` → `wait_idle` → `screenshot`/`state`. The server runs the
 build from when it started: after code changes, reconnect it (`/mcp`) before judging the result. Turn findings
 into a test in `mcp::tests` or `render_tests`. Never point it at the user's real repos unless asked. The merge render test mutates the demo repo; rebuild it before rerunning.
 

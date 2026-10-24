@@ -233,6 +233,43 @@ impl Server {
                 }
                 settle(h, Duration::from_secs(2));
             }
+            "drag" => {
+                let from = target(h, args)?;
+                let mut to = serde_json::Map::new();
+                for (k, from_key) in [
+                    ("label", "to"),
+                    ("nth", "to_nth"),
+                    ("x", "to_x"),
+                    ("y", "to_y"),
+                ] {
+                    if let Some(v) = args.get(from_key) {
+                        to.insert(k.into(), v.clone());
+                    }
+                }
+                let to = target(h, &Value::Object(to)).map_err(|e| format!("to: {e}"))?;
+                h.event(Event::PointerMoved(from));
+                h.step();
+                h.event(Event::PointerButton {
+                    pos: from,
+                    button: PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Modifiers::NONE,
+                });
+                h.step();
+                // In steps, like a hand, so the drag starts and targets see it pass.
+                for k in 1..=8 {
+                    h.event(Event::PointerMoved(from + (to - from) * (k as f32 / 8.0)));
+                    h.step();
+                }
+                h.event(Event::PointerButton {
+                    pos: to,
+                    button: PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Modifiers::NONE,
+                });
+                h.step();
+                settle(h, Duration::from_secs(2));
+            }
             "type_text" => {
                 if args.get("label").is_some() || args.get("x").is_some() {
                     let pos = target(h, args)?;
@@ -652,6 +689,16 @@ fn tool_list() -> Value {
             &[]
         ),
         tool(
+            "drag",
+            "Drag a widget (by label or position) and drop it on another (to / to_x,to_y). A commit row dropped on a local branch label asks to cherry-pick it onto that branch, a branch dropped on one asks to merge it; confirm in the alert bar.",
+            with(
+                json!({"to": {"type": "string", "description": "Label of the widget to drop on."},
+                        "to_nth": {"type": "integer", "description": "Which match of `to`, 0-based from the top."},
+                        "to_x": {"type": "number"}, "to_y": {"type": "number"}})
+            ),
+            &[]
+        ),
+        tool(
             "type_text",
             "Type text into the focused field, or click the field given by label/x,y first.",
             with(json!({"text": {"type": "string"}})),
@@ -816,6 +863,69 @@ mod tests {
 
         let (err, out) = call(&mut s, "key", json!({"key": "NoSuchKey"}));
         assert!(err, "{out}");
+    }
+
+    /// Drag and drop: a commit onto a branch label asks to cherry-pick it there, a branch onto
+    /// a branch asks to merge it; a branch elsewhere is checked out first, never over changes.
+    #[test]
+    fn drag_and_drop_cherry_picks_and_merges() {
+        let mut s = Server::default();
+        let (err, out) = call(&mut s, "demo_repo", json!({}));
+        assert!(!err, "{out}");
+        let state = |s: &mut Server| -> Value {
+            serde_json::from_str(&call(s, "state", json!({"commits": 1})).1).unwrap()
+        };
+        let current = "feature/PROJ-523-ai-search";
+
+        // The branch's own tip: nothing to ask.
+        let (err, out) = call(
+            &mut s,
+            "drag",
+            json!({"label": "PROJ-561 - Show follow-up sources as cards", "to": current, "to_nth": 0}),
+        );
+        assert!(!err, "{out}");
+        assert!(state(&mut s)["tabs"][0]["alert"].is_null());
+
+        let (err, out) = call(
+            &mut s,
+            "drag",
+            json!({"label": "PROJ-610 - Fix date format", "to": current, "to_nth": 0}),
+        );
+        assert!(!err, "{out}");
+        let alert = &state(&mut s)["tabs"][0]["alert"];
+        let title = alert["title"].as_str().unwrap_or_default();
+        assert!(
+            title.starts_with("Cherry-pick") && title.ends_with(&format!("onto {current}?")),
+            "{alert}"
+        );
+        assert_eq!(alert["body"], "PROJ-610 - Fix date format");
+        call(&mut s, "key", json!({"key": "Enter"}));
+        call(&mut s, "wait_idle", json!({}));
+        let st = state(&mut s);
+        assert_eq!(
+            st["tabs"][0]["commits"][0]["subject"], "PROJ-610 - Fix date format",
+            "{st:#}"
+        );
+        assert!(st["tabs"][0]["alert"].is_null());
+
+        // Onto a branch that is not checked out, with uncommitted changes: refused.
+        let (err, out) = call(
+            &mut s,
+            "drag",
+            json!({"label": "feature/QA-391-test", "nth": 0, "to": "develop", "to_nth": 0}),
+        );
+        assert!(!err, "{out}");
+        let alert = &state(&mut s)["tabs"][0]["alert"];
+        assert_eq!(
+            alert["title"], "Merge feature/QA-391-test into develop?",
+            "{alert}"
+        );
+        assert_eq!(alert["body"], "Checks out develop first.");
+        call(&mut s, "key", json!({"key": "Enter"}));
+        call(&mut s, "wait_idle", json!({}));
+        let st = state(&mut s);
+        assert_eq!(st["tabs"][0]["head_branch"], current, "{st:#}");
+        assert!(st.to_string().contains("stash your changes"), "{st:#}");
     }
 
     fn remote_branches(s: &mut Server) -> Vec<String> {

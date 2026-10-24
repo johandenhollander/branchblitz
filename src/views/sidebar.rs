@@ -542,7 +542,13 @@ fn ref_leaf(
     let is_current =
         r.kind == RefKind::Local && data.head_branch.as_deref() == Some(r.name.as_str());
     let selected = is_current || side.selected == Some(r.target.as_str());
-    let resp = ds::row(ui, pal, ROW_H, selected, label);
+    // Branches drag onto another branch to merge them into it.
+    let sense = if r.kind == RefKind::Tag {
+        Sense::click()
+    } else {
+        Sense::click_and_drag()
+    };
+    let resp = ds::row_sense(ui, pal, ROW_H, selected, label, sense);
     let rect = resp.rect;
     let p = ui.painter();
     let yc = rect.center().y;
@@ -628,6 +634,16 @@ fn ref_leaf(
         .branch(r.branch_name(), pal)
         .unwrap_or(pal.accent);
     resp.context_menu(|ui| ref_menu(ui, pal, r, data, lane, acts));
+    if r.kind != RefKind::Tag {
+        dnd::source(&resp, || dnd::Drag::Branch {
+            name: r.name.clone(),
+            spec: data.spec(r),
+            target: r.target.clone(),
+        });
+    }
+    if r.kind == RefKind::Local {
+        dnd::target(ui, &resp, &r.name, data, pal, acts);
+    }
 }
 
 pub(crate) fn checkout_action(r: &RefInfo, data: &RepoData) -> Action {
