@@ -6,6 +6,10 @@ It has an AI agent built in that can operate the app for you, and you see every 
 
 ![BranchBlitz in dark and light](docs/screenshot.png)
 
+https://github.com/user-attachments/assets/5627ffcf-fe5f-47c5-9027-6adf6bcb7f65
+
+
+
 ## Features
 
 - **Commit graph** with coloured lanes and branch/tag labels. A local branch and its remote counterpart on
