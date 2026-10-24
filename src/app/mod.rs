@@ -396,6 +396,13 @@ impl BranchBlitz {
                     let info = r.adapter.get_info();
                     format!("{} ({:?})", info.name, info.backend)
                 })
+                .or_else(|| {
+                    use eframe::glow::HasContext;
+                    // SAFETY: a plain glGetString on the context eframe made current.
+                    let gl = cc.gl.as_ref()?;
+                    let name = unsafe { gl.get_parameter_string(eframe::glow::RENDERER) };
+                    Some(format!("{name} (OpenGL)"))
+                })
                 .unwrap_or_else(|| "unknown".into()),
             high_performance_at_start: settings.gpu_high_performance,
             system: system_info(),

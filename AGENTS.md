@@ -44,6 +44,7 @@ cargo run -- /tmp/bbdemo/work
 cargo install --path .        # ~/.local/bin/branchblitz symlinks to ~/.cargo/bin
 BB_DEBUG_REPAINT=1 branchblitz   # stderr: frames per 2 s and why (an idle window should draw none)
 BB_DEBUG_PANIC=1 branchblitz     # crashes after the first frame: checks the crash log and the report at the next start
+BRANCHBLITZ_RENDERER=glow branchblitz   # OpenGL instead of wgpu (also the automatic fallback when wgpu finds no adapter)
 ```
 
 ## Verify work (all must pass)

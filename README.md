@@ -134,6 +134,9 @@ BranchBlitz renders on the integrated GPU where there are two (Settings, General
 discrete GPU can stay asleep; choose *High performance* to use the discrete one. `WGPU_POWER_PREF` overrides
 the setting. `BB_DEBUG_REPAINT=1` prints how often the window redraws (an idle window draws nothing).
 
+Without a usable GPU adapter (a VM without 3D, a desktop over VNC or RDP) BranchBlitz falls back to OpenGL,
+which also works with software rendering (llvmpipe). `BRANCHBLITZ_RENDERER=glow` uses OpenGL from the start.
+
 ## Development
 
 ```sh

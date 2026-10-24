@@ -134,6 +134,25 @@ fn main() -> eframe::Result {
     if !high {
         hide_discrete_vulkan();
     }
+    // `BRANCHBLITZ_RENDERER=glow` skips wgpu; otherwise OpenGL is the fallback when wgpu finds
+    // no adapter, e.g. a VM without 3D over VNC or RDP, where GLX still works (llvmpipe).
+    if std::env::var("BRANCHBLITZ_RENDERER").is_ok_and(|r| r.eq_ignore_ascii_case("glow")) {
+        return run(eframe::Renderer::Glow, high, crashed);
+    }
+    match run(eframe::Renderer::Wgpu, high, crashed) {
+        // Only when wgpu failed before the app started, not on a later error.
+        Err(eframe::Error::Wgpu(e)) if !STARTED.load(std::sync::atomic::Ordering::Relaxed) => {
+            log::write("WARN", &format!("wgpu unavailable ({e}), falling back to OpenGL"));
+            run(eframe::Renderer::Glow, high, crashed)
+        }
+        result => result,
+    }
+}
+
+/// Set once the app is created: a renderer error after that is no reason to start it again.
+static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn run(renderer: eframe::Renderer, high: bool, crashed: bool) -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("BranchBlitz")
@@ -141,7 +160,7 @@ fn main() -> eframe::Result {
             .with_inner_size([1400.0, 860.0])
             .with_min_inner_size([800.0, 500.0])
             .with_icon(app_icon()),
-        renderer: eframe::Renderer::Wgpu,
+        renderer,
         wgpu_options: eframe::WgpuConfiguration {
             wgpu_setup: chosen_gpu(high).into(),
             ..Default::default()
@@ -151,7 +170,8 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "BranchBlitz",
         options,
-        Box::new(|cc| {
+        Box::new(move |cc| {
+            STARTED.store(true, std::sync::atomic::Ordering::Relaxed);
             let open = std::env::args_os().nth(1).map(std::path::PathBuf::from);
             color_scheme::watch(cc.egui_ctx.clone());
             let mut app = app::BranchBlitz::new(cc, open);

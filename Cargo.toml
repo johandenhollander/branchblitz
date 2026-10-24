@@ -12,7 +12,7 @@ categories = ["development-tools", "command-line-utilities"]
 
 [dependencies]
 chrono = "0.4.45"
-eframe = { version = "0.37.0", features = ["persistence"] }
+eframe = { version = "0.37.0", features = ["persistence", "glow"] }
 egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }
 rfd = "0.17.2"
 serde = { version = "1.0.229", features = ["derive"] }
