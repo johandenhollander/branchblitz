@@ -1,6 +1,6 @@
 [package]
 name = "branchblitz"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 rust-version = "1.95"
 description = "A fast desktop git client that shows every branch and tag in the graph, with an AI agent built in"
