@@ -456,6 +456,7 @@ fn dashed_v(painter: &Painter, x: f32, y0: f32, y1: f32, color: Color32) {
 }
 
 pub fn graph_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<Action>) {
+    let landing = dnd::take_landing(ui.ctx());
     let has_wip = tab.has_wip_row();
     let RepoTab {
         data,
@@ -957,9 +958,7 @@ pub fn graph_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<
                             target: first.target.clone(),
                         });
                     }
-                    if first.kind == RefKind::Local {
-                        dnd::target(ui, &presp, &first.name, data, pal, acts);
-                    }
+                    dnd::target(ui, &presp, first, data, pal, acts);
                 }
                 if more > 0 {
                     let r = ds::paint_more(&painter, pos2(x, yc), more, pal);
@@ -1003,6 +1002,16 @@ pub fn graph_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<
             }
             if is_head {
                 gpainter.circle_stroke(node, 9.0, Stroke::new(1.5, pal.text));
+            }
+            // Dragging over a branch: where the new commit would land, on top of this one.
+            if landing.as_deref() == Some(c.sha.as_str()) {
+                let lp = ui.painter();
+                let spot = pos2(node.x, rect.top());
+                let accent = Stroke::new(2.0, pal.accent);
+                lp.line_segment([spot, pos2(cols.msg.1, spot.y)], accent);
+                lp.line_segment([spot, node - vec2(0.0, NODE_R)], accent);
+                lp.circle_filled(spot, NODE_R, pal.canvas);
+                lp.circle_stroke(spot, NODE_R, accent);
             }
             // More lanes than fit: fade them out at the column's right edge.
             if graph_fit(graph.lanes) > cols.graph.1 - cols.graph.0 + 0.5 {

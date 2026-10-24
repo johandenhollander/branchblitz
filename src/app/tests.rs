@@ -91,6 +91,16 @@ mod render_tests {
         }
         h.run_steps(2);
         save(&mut h, "drag-target");
+        // The remote develop (lowest), which local develop is behind: pulls it first.
+        let remote = h
+            .get_all_by_label("develop")
+            .max_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+            .expect("origin/develop")
+            .rect()
+            .center();
+        h.hover_at(remote);
+        h.run_steps(3);
+        save(&mut h, "drag-remote");
         h.hover_at(from + egui::vec2(0.0, 60.0));
         h.run_steps(2);
         save(&mut h, "drag");

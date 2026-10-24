@@ -1305,9 +1305,11 @@ pub enum Op {
     },
     /// Checks out local branch `branch` (when it is not checked out already), then runs `then`:
     /// a commit or branch dropped on that branch. Refuses with uncommitted changes, which the
-    /// checkout would otherwise carry along.
+    /// checkout would otherwise carry along. With `pull` (remote, branch on the remote) it first
+    /// fetches that branch and fast-forwards `branch` to it, or creates `branch` from it.
     Onto {
         branch: String,
+        pull: Option<(String, String)>,
         then: Box<Op>,
     },
 }
@@ -1361,7 +1363,7 @@ impl Op {
             Op::LockWorktree { lock: true, .. } => "Lock worktree".into(),
             Op::LockWorktree { lock: false, .. } => "Unlock worktree".into(),
             Op::ResolveFile { path, .. } => format!("Resolve {path}"),
-            Op::Onto { branch, then } => match &**then {
+            Op::Onto { branch, then, .. } => match &**then {
                 Op::CherryPick(s) => format!("Cherry-pick {} onto {branch}", short(s)),
                 Op::Merge { what, .. } => format!("Merge {what} into {branch}"),
                 other => other.label(),
@@ -1396,8 +1398,11 @@ impl Op {
                 v
             }
             Op::LockWorktree { path, .. } => vec![path],
-            Op::Onto { branch, then } => {
+            Op::Onto { branch, pull, then } => {
                 let mut v = vec![branch.as_str()];
+                if let Some((remote, b)) = pull {
+                    v.extend([remote.as_str(), b.as_str()]);
+                }
                 v.extend(then.names());
                 v
             }
@@ -1608,28 +1613,58 @@ impl Op {
                 g(&["worktree", if *lock { "lock" } else { "unlock" }, path])
             }
             Op::ContinueMerge => g(&["commit", "--no-edit"]),
-            Op::Onto { branch, then } => {
+            Op::Onto { branch, pull, then } => {
                 if load_state(repo) != RepoState::Clean {
                     return Err("Finish or abort the operation in progress first".into());
                 }
                 let head = g(&["symbolic-ref", "-q", "--short", "HEAD"])
                     .map_err(|_| "HEAD is detached; check out a branch first".to_string())?;
-                let mut out = String::new();
-                if head.trim() != branch {
-                    if !g(&["status", "--porcelain", "--untracked-files=no"])?
+                let switching = head.trim() != branch;
+                if switching
+                    && !g(&["status", "--porcelain", "--untracked-files=no"])?
                         .trim()
                         .is_empty()
-                    {
+                {
+                    return Err(format!(
+                        "Commit or stash your changes before switching to {branch}"
+                    ));
+                }
+                let ancestor = |a: &str, b: &str| g(&["merge-base", "--is-ancestor", a, b]).is_ok();
+                let local = format!("refs/heads/{branch}");
+                let mut out = String::new();
+                // Where the result lands: the remote branch once fetched, else the local one.
+                let tip = match pull {
+                    Some((remote, b)) => {
+                        out += &net(&["fetch", remote, &format!("refs/heads/{b}")])?;
+                        let tip = format!("refs/remotes/{remote}/{b}");
+                        g(&["rev-parse", "--verify", "-q", &tip])
+                            .map_err(|_| format!("Fetching did not update {remote}/{b}"))?;
+                        tip
+                    }
+                    None => local.clone(),
+                };
+                if let Op::CherryPick(sha) = &**then
+                    && ancestor(sha, &tip)
+                {
+                    return Err(format!("{} is already in {branch}", short(sha)));
+                }
+                let exists = g(&["rev-parse", "--verify", "-q", &local]).is_ok();
+                if pull.is_some() && !exists {
+                    out += &g(&["switch", "-c", branch, "--track", &tip])?;
+                } else {
+                    let behind = pull.is_some() && !ancestor(&tip, &local);
+                    if behind && !ancestor(&local, &tip) {
                         return Err(format!(
-                            "Commit or stash your changes before switching to {branch}"
+                            "{branch} and {} have diverged; pull {branch} first",
+                            tip.trim_start_matches("refs/remotes/")
                         ));
                     }
-                    if let Op::CherryPick(sha) = &**then
-                        && g(&["merge-base", "--is-ancestor", sha, branch]).is_ok()
-                    {
-                        return Err(format!("{} is already in {branch}", short(sha)));
+                    if switching {
+                        out += &g(&["switch", branch])?;
                     }
-                    out = g(&["switch", branch])?;
+                    if behind {
+                        out += &g(&["merge", "--ff-only", &tip])?;
+                    }
                 }
                 Ok(out + &then.run(repo, data)?)
             }
@@ -2104,6 +2139,78 @@ mod tests {
     }
 
     #[test]
+    fn onto_a_remote_branch_pulls_it_first() {
+        let dir = repo("onto-pull");
+        let bare = dir.with_extension("remote.git");
+        let _ = std::fs::remove_dir_all(&bare);
+        let g = |args: &[&str]| git(&dir, args).unwrap().trim().to_string();
+        g(&["init", "-q", "--bare", bare.to_str().unwrap()]);
+        g(&["remote", "add", "origin", bare.to_str().unwrap()]);
+        g(&["push", "-q", "origin", "main:target", "main:fresh"]);
+        g(&["fetch", "-q", "origin"]);
+        g(&["branch", "--track", "target", "origin/target"]);
+        // Someone else pushes to target; this clone has not fetched it yet.
+        let commit_on_remote = |name: &str| {
+            g(&["switch", "-qc", "tmp", "origin/target"]);
+            std::fs::write(dir.join(format!("{name}.txt")), "x\n").unwrap();
+            g(&["add", "-A"]);
+            g(&["commit", "-qm", name]);
+            g(&["push", "-q", "origin", "tmp:target"]);
+            let sha = g(&["rev-parse", "HEAD"]);
+            g(&["switch", "-q", "main"]);
+            g(&["branch", "-qD", "tmp"]);
+            g(&["update-ref", "refs/remotes/origin/target", "target"]);
+            sha
+        };
+        let theirs = commit_on_remote("theirs");
+        g(&["switch", "-qc", "feature"]);
+        std::fs::write(dir.join("b.txt"), "b\n").unwrap();
+        g(&["add", "b.txt"]);
+        g(&["commit", "-qm", "pick me"]);
+        let pick = g(&["rev-parse", "HEAD"]);
+        let onto = |branch: &str, then: Op| Op::Onto {
+            branch: branch.into(),
+            pull: Some(("origin".into(), branch.into())),
+            then: Box::new(then),
+        };
+
+        onto("target", Op::CherryPick(pick.clone()))
+            .run(&dir, None)
+            .unwrap();
+        assert_eq!(g(&["symbolic-ref", "--short", "HEAD"]), "target");
+        assert_eq!(g(&["log", "-1", "--format=%s"]), "pick me");
+        assert_eq!(g(&["rev-parse", "HEAD~1"]), theirs, "pulled first");
+
+        // No local branch yet: created from the remote one.
+        g(&["switch", "-q", "feature"]);
+        onto("fresh", Op::CherryPick(pick.clone()))
+            .run(&dir, None)
+            .unwrap();
+        assert_eq!(g(&["symbolic-ref", "--short", "HEAD"]), "fresh");
+        assert_eq!(
+            g(&["rev-parse", "--abbrev-ref", "fresh@{upstream}"]),
+            "origin/fresh"
+        );
+
+        // Local target has its own commit and the remote another: refused, nothing moved.
+        commit_on_remote("more");
+        g(&["switch", "-q", "feature"]);
+        let err = onto(
+            "target",
+            Op::Merge {
+                what: "feature".into(),
+                mode: MergeMode::Default,
+            },
+        )
+        .run(&dir, None)
+        .unwrap_err();
+        assert!(err.contains("diverged"), "{err}");
+        assert_eq!(g(&["symbolic-ref", "--short", "HEAD"]), "feature");
+        let _ = std::fs::remove_dir_all(&bare);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn onto_checks_out_the_branch_first() {
         let dir = repo("onto");
         let head = |d: &Path| git(d, &["symbolic-ref", "--short", "HEAD"]).unwrap();
@@ -2121,6 +2228,7 @@ mod tests {
         std::fs::write(dir.join("a.txt"), "dirty\n").unwrap();
         let onto = |then: Op| Op::Onto {
             branch: "target".into(),
+            pull: None,
             then: Box::new(then),
         };
         let err = onto(Op::CherryPick(pick.clone()))

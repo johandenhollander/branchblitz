@@ -641,9 +641,7 @@ fn ref_leaf(
             target: r.target.clone(),
         });
     }
-    if r.kind == RefKind::Local {
-        dnd::target(ui, &resp, &r.name, data, pal, acts);
-    }
+    dnd::target(ui, &resp, r, data, pal, acts);
 }
 
 pub(crate) fn checkout_action(r: &RefInfo, data: &RepoData) -> Action {

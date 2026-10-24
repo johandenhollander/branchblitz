@@ -15,9 +15,10 @@ It has an AI agent built in that can operate the app for you, and you see every 
 - **Right-click any branch** (sidebar or graph label): merge into the current branch, rebase, check out,
   fast-forward, create a branch or tag, rename, delete (locally or on the remote), push.
 - **Right-click a commit**: branch or tag here, check out, cherry-pick, revert, reset (soft/mixed/hard).
-- **Drag and drop**: drag a commit onto a local branch (in the graph or the sidebar) to cherry-pick it
-  there, or a branch onto another to merge it into that one. It asks first, and checks the branch out first
-  when it is not the current one (not over uncommitted changes).
+- **Drag and drop**: drag a commit onto a branch label (in the graph or the sidebar) to cherry-pick it
+  there, or a branch onto another to merge it into that one; a line in the graph shows where it lands. It
+  asks first, and checks the branch out first when it is not the current one (not over uncommitted
+  changes). Dropped on a remote branch, it pulls that into the local branch first, or creates it.
 - **Find commits** by message or hash (`Ctrl F`).
 - **Fetch and pull**: fetch on opening and switching tabs, optional periodic auto-fetch; one Pull button
   whose default (fetch all, merge, fast-forward only, rebase) is remembered per repository.
