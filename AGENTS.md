@@ -50,6 +50,7 @@ BRANCHBLITZ_RENDERER=glow branchblitz   # OpenGL instead of wgpu (also the autom
 ## Verify work (all must pass)
 
 ```sh
+cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 scripts/demo-repo.sh && BB_DEMO=/tmp/bbdemo/work cargo test render -- --ignored --nocapture   # UI: /tmp/bb-*.png

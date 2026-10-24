@@ -142,7 +142,10 @@ fn main() -> eframe::Result {
     match run(eframe::Renderer::Wgpu, high, crashed) {
         // Only when wgpu failed before the app started, not on a later error.
         Err(eframe::Error::Wgpu(e)) if !STARTED.load(std::sync::atomic::Ordering::Relaxed) => {
-            log::write("WARN", &format!("wgpu unavailable ({e}), falling back to OpenGL"));
+            log::write(
+                "WARN",
+                &format!("wgpu unavailable ({e}), falling back to OpenGL"),
+            );
             run(eframe::Renderer::Glow, high, crashed)
         }
         result => result,
