@@ -22,7 +22,7 @@ jobs:
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != Cargo.toml $version"; exit 1; }
 
-  # .tar.gz, .deb and AppImage. Built on Ubuntu 22.04 so the binary runs on older glibc too.
+  # .tar.gz, .deb and AppImage. Linked against glibc 2.28 (cargo-zigbuild), so they run on RHEL 8 too.
   linux:
     needs: check
     strategy:
@@ -34,7 +34,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-deb
+          tool: cargo-deb,cargo-zigbuild
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.13.0
       - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev
       - run: scripts/package-linux.sh
       - uses: actions/upload-artifact@v7

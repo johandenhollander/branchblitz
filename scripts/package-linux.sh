@@ -2,14 +2,17 @@
 # Builds the Linux release packages into dist/: a .tar.gz (binary, desktop entry, icons, install.sh),
 # a .deb (cargo-deb) and an AppImage (appimagetool, downloaded when not on the PATH).
 # Run from the repository root; the architecture is the machine's (x86_64 or aarch64).
+# Links against glibc 2.28 (RHEL 8, Debian 10, Ubuntu 18.04 and newer) through cargo-zigbuild,
+# so it needs zig and cargo-zigbuild on the PATH.
 set -euo pipefail
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 arch=$(uname -m)
 out=dist
 mkdir -p "$out"
 
-cargo build --profile dist --locked
-bin=target/dist/branchblitz
+target=$arch-unknown-linux-gnu
+cargo zigbuild --profile dist --locked --target "$target.2.28"
+bin=target/$target/dist/branchblitz
 
 # .tar.gz: unpack and run ./install.sh (to ~/.local), or run ./branchblitz directly.
 name="branchblitz-$version-linux-$arch"
@@ -32,7 +35,7 @@ tar -czf "$out/$name.tar.gz" -C "$stage" "$name"
 rm -rf "$stage"
 
 # .deb (installs to /usr, depends on git).
-cargo deb --profile dist --no-build --no-strip --output "$out/"
+cargo deb --profile dist --target "$target" --no-build --no-strip --output "$out/"
 
 # AppImage: one file, runs on most distributions (needs FUSE, like every AppImage).
 tool=${APPIMAGETOOL:-$(command -v appimagetool || true)}
