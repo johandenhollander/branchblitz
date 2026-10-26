@@ -1069,8 +1069,8 @@ mod tests {
         assert!(t.commit_msg.is_empty() && t.commit_body.is_empty());
     }
 
-    /// A file staged in a terminal shows up without F5 or a focus change, and a description
-    /// alone (no summary) is enough to commit.
+    /// A file staged or a branch made in a terminal shows up without F5 or a focus change, and a
+    /// description alone (no summary) is enough to commit.
     #[test]
     fn notices_an_outside_stage_and_commits_a_description() {
         let mut s = Server::default();
@@ -1091,6 +1091,22 @@ mod tests {
         let t = std::time::Instant::now();
         while staged(&mut s) != 1 {
             assert!(t.elapsed().as_secs() < 5, "outside stage not noticed");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        // A branch in a folder only touches `refs/heads/feature`, not `refs/heads`.
+        assert!(dir.join(".git/refs/heads/feature").is_dir());
+        crate::git::git(&dir, &["branch", "feature/outside"]).unwrap();
+        let has_branch = |s: &mut Server| {
+            let h = s.session.as_mut().unwrap();
+            h.step();
+            h.state_mut().tabs_mut()[0]
+                .data
+                .as_ref()
+                .is_some_and(|d| d.local("feature/outside").is_some())
+        };
+        let t = std::time::Instant::now();
+        while !has_branch(&mut s) {
+            assert!(t.elapsed().as_secs() < 5, "outside branch not noticed");
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
 

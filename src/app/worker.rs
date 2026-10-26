@@ -21,10 +21,12 @@ pub(super) fn spawn_worker(
         let mut remote_tags: Option<HashMap<String, String>> = None;
         // Changes made outside the app (a stage in a terminal) are noticed by polling the stat of
         // git's own files; taken right before each load so the app's own changes don't count.
-        let paths = git::watch_paths(&path).unwrap_or_default();
+        let mut paths = git::watch_paths(&path).unwrap_or_default();
         let mut seen = git::fingerprint(&paths);
-        let load = |seen: &mut Vec<_>, remote_tags: &Option<HashMap<String, String>>| {
-            *seen = git::fingerprint(&paths);
+        let load = |paths: &[PathBuf],
+                    seen: &mut Vec<_>,
+                    remote_tags: &Option<HashMap<String, String>>| {
+            *seen = git::fingerprint(paths);
             git::load(&path, limit.load(Ordering::Relaxed)).map(|mut d| {
                 d.remote_tags = remote_tags.clone();
                 d
@@ -34,7 +36,12 @@ pub(super) fn spawn_worker(
             let first = match job_rx.recv_timeout(POLL) {
                 Ok(j) => j,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if last.is_none() || git::fingerprint(&paths) == seen {
+                    if paths.is_empty() {
+                        paths = git::watch_paths(&path).unwrap_or_default();
+                        seen = git::fingerprint(&paths);
+                        continue;
+                    }
+                    if git::fingerprint(&paths) == seen {
                         continue;
                     }
                     Job::Load(generation)
@@ -52,7 +59,7 @@ pub(super) fn spawn_worker(
             }
             let send_load =
                 |last: &mut Option<RepoData>, seen: &mut Vec<_>, remote_tags: &Option<_>| {
-                    let loaded = load(seen, remote_tags);
+                    let loaded = load(&paths, seen, remote_tags);
                     *last = loaded.as_ref().ok().cloned();
                     let _ = tx.send(Msg {
                         tab: id,
@@ -83,7 +90,7 @@ pub(super) fn spawn_worker(
                         }
                         let check_tags = result.is_ok() && matches!(op, Op::Fetch | Op::Pull(_));
                         // Reload before reporting so the graph is current when the spinner stops.
-                        let loaded = load(&mut seen, &remote_tags);
+                        let loaded = load(&paths, &mut seen, &remote_tags);
                         last = loaded.as_ref().ok().cloned();
                         let _ = tx.send(Msg {
                             tab: id,
@@ -106,7 +113,7 @@ pub(super) fn spawn_worker(
                                     d.remote_tags = remote_tags.clone();
                                     Ok(d)
                                 }
-                                None => load(&mut seen, &remote_tags),
+                                None => load(&paths, &mut seen, &remote_tags),
                             };
                             last = loaded.as_ref().ok().cloned();
                             let _ = tx.send(Msg {
@@ -119,7 +126,7 @@ pub(super) fn spawn_worker(
                 }
             }
             if need_load {
-                let loaded = load(&mut seen, &remote_tags);
+                let loaded = load(&paths, &mut seen, &remote_tags);
                 last = loaded.as_ref().ok().cloned();
                 let _ = tx.send(Msg {
                     tab: id,

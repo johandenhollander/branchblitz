@@ -1191,16 +1191,32 @@ pub fn watch_paths(repo: &Path) -> Result<Vec<PathBuf>, String> {
         .collect())
 }
 
-/// Size and modification time of each of `paths` (`None` when missing): changes when the
-/// repository changed outside the app.
+/// Size and modification time of each of `paths` (`None` when missing) and of every directory
+/// below them: a ref like `refs/remotes/origin/main` only touches its own directory. Changes
+/// when the repository changed outside the app.
 pub fn fingerprint(paths: &[PathBuf]) -> Vec<Option<(std::time::SystemTime, u64)>> {
-    paths
-        .iter()
-        .map(|p| {
-            let m = std::fs::metadata(p).ok()?;
-            Some((m.modified().ok()?, m.len()))
-        })
-        .collect()
+    fn stat(p: &Path, out: &mut Vec<Option<(std::time::SystemTime, u64)>>) {
+        let m = std::fs::metadata(p).ok();
+        out.push(m.as_ref().and_then(|m| Some((m.modified().ok()?, m.len()))));
+        if m.is_some_and(|m| m.is_dir())
+            && let Ok(entries) = std::fs::read_dir(p)
+        {
+            let mut dirs: Vec<PathBuf> = entries
+                .flatten()
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                .map(|e| e.path())
+                .collect();
+            dirs.sort();
+            for d in dirs {
+                stat(&d, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for p in paths {
+        stat(p, &mut out);
+    }
+    out
 }
 
 fn load_state(repo: &Path) -> RepoState {
