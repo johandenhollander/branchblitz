@@ -7,7 +7,8 @@ impl BranchBlitz {
         let mut switch = None;
         let mut close = None;
         let animate = self.settings.animation_ms > 0;
-        let secs = self.settings.animation_ms.min(500) as f32 / 1000.0;
+        // Tabs sliding aside take longer than menus: a move should be followed by the eye.
+        let secs = self.settings.animation_ms.min(500) as f32 * 2.5 / 1000.0;
         ui.horizontal(|ui| {
             const GAP: f32 = 2.0;
             ui.spacing_mut().item_spacing.x = GAP;
