@@ -1226,6 +1226,51 @@ mod tests {
         }
     }
 
+    /// Double-clicking a remote branch checks out its local branch and brings it up to date, also
+    /// when that branch is already checked out.
+    #[test]
+    fn double_click_on_a_remote_branch_updates_the_local_one() {
+        let mut s = Server::default();
+        let (_, out) = call(&mut s, "demo_repo", json!({}));
+        let work = out
+            .split(" at ")
+            .nth(1)
+            .unwrap()
+            .split(" (remote")
+            .next()
+            .unwrap()
+            .to_string();
+        let git = |args: &[&str]| {
+            let o = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&work)
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+            String::from_utf8_lossy(&o.stdout).trim().to_string()
+        };
+        git(&["stash", "-qu"]);
+        git(&["switch", "-q", "develop"]);
+        let remote = git(&["rev-parse", "--short", "origin/develop"]);
+        assert_ne!(git(&["rev-parse", "--short", "develop"]), remote);
+        call(&mut s, "wait_idle", json!({}));
+
+        let (err, out) = call(
+            &mut s,
+            "click",
+            json!({"label": "origin/develop", "role": "Button", "double": true}),
+        );
+        assert!(!err, "{out}");
+        call(&mut s, "wait_idle", json!({}));
+        let state: Value =
+            serde_json::from_str(&call(&mut s, "state", json!({"commits": 0})).1).unwrap();
+        let t = &state["tabs"][0];
+        assert_eq!(t["head_branch"], "develop", "{t:#?}");
+        assert_eq!(t["head"], remote.as_str(), "{t:#?}");
+    }
+
     /// A branch checked out in another worktree can't be checked out here; its menu and a
     /// double-click switch the tab to that worktree instead, and back again.
     #[test]

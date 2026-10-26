@@ -618,6 +618,10 @@ fn ref_leaf(
             "\nchecked out in worktree {}\nDouble-click to switch to it",
             path.display()
         ),
+        None if r.kind == RefKind::Remote && data.local(r.branch_name()).is_some() => format!(
+            "\nDouble-click to check out {} and update it",
+            r.branch_name()
+        ),
         None => "\nDouble-click to check out".into(),
     };
     let resp = resp.on_hover_text(format!(
@@ -650,7 +654,13 @@ pub(crate) fn checkout_action(r: &RefInfo, data: &RepoData) -> Action {
         RefKind::Remote => {
             let local = r.branch_name().to_string();
             if data.local(&local).is_some() {
-                checkout_local(&local, data)
+                match checkout_local(&local, data) {
+                    Action::Op(_) => Action::Op(Op::CheckoutUpdate {
+                        local,
+                        to: r.full.clone(),
+                    }),
+                    switch => switch,
+                }
             } else {
                 Action::Op(Op::CheckoutRemote {
                     remote_ref: r.name.clone(),

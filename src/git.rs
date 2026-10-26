@@ -1437,6 +1437,12 @@ pub enum Op {
         local: String,
     },
     CheckoutCommit(String),
+    /// Check out local branch `local` and fast-forward it to `to` (its remote branch) when it is
+    /// behind; a diverged or ahead branch is only checked out.
+    CheckoutUpdate {
+        local: String,
+        to: String,
+    },
     Merge {
         what: String,
         mode: MergeMode,
@@ -1569,6 +1575,7 @@ impl Op {
             Op::Checkout(b) => format!("Checkout {b}"),
             Op::CheckoutRemote { local, .. } => format!("Checkout {local}"),
             Op::CheckoutCommit(s) => format!("Checkout {}", short(s)),
+            Op::CheckoutUpdate { local, .. } => format!("Checkout {local}"),
             Op::Merge { what, .. } => format!("Merge {what}"),
             Op::Rebase(b) => format!("Rebase onto {b}"),
             Op::CreateBranch { name, .. } => format!("Create branch {name}"),
@@ -1635,7 +1642,7 @@ impl Op {
             Op::DeleteRemoteBranch { remote, branch } | Op::PushBranch { remote, branch } => {
                 vec![remote, branch]
             }
-            Op::FastForward { local, to } => vec![local, to],
+            Op::FastForward { local, to } | Op::CheckoutUpdate { local, to } => vec![local, to],
             Op::RenameBranch { old, new } => vec![old, new],
             Op::PushTag { remote, name } => vec![remote, name],
             Op::Reset { to, .. } => vec![to],
@@ -1726,6 +1733,19 @@ impl Op {
                 g(&["switch", "-c", local, "--track", remote_ref])
             }
             Op::CheckoutCommit(s) => g(&["switch", "--detach", s]),
+            Op::CheckoutUpdate { local, to } => {
+                let head = g(&["symbolic-ref", "-q", "--short", "HEAD"]).unwrap_or_default();
+                let mut out = String::new();
+                if head.trim() != local {
+                    out += &g(&["switch", local])?;
+                }
+                let ancestor = |a: &str, b: &str| g(&["merge-base", "--is-ancestor", a, b]).is_ok();
+                let branch = format!("refs/heads/{local}");
+                if !ancestor(to, &branch) && ancestor(&branch, to) {
+                    out += &g(&["merge", "--ff-only", to])?;
+                }
+                Ok(out)
+            }
             Op::Merge { what, mode } => {
                 let mut args = vec!["merge", "--no-edit"];
                 match mode {
@@ -2780,6 +2800,59 @@ mod tests {
         );
         assert_eq!(git(&dir, &["tag", "-l"]).unwrap().trim(), "1.0.1");
         assert!(git(&dir, &["merge-base", "--is-ancestor", "main", "develop"]).is_ok());
+    }
+
+    #[test]
+    fn checkout_update_fast_forwards_to_the_remote_branch() {
+        let dir = repo("checkout-update");
+        let g = |args: &[&str]| git(&dir, args).unwrap().trim().to_string();
+        let base = g(&["rev-parse", "HEAD"]);
+        std::fs::write(dir.join("new.txt"), "x\n").unwrap();
+        g(&["add", "-A"]);
+        g(&["commit", "-qm", "newer"]);
+        let newer = g(&["rev-parse", "HEAD"]);
+        g(&["update-ref", "refs/remotes/origin/develop", &newer]);
+        g(&["branch", "develop", &base]);
+        let op = || Op::CheckoutUpdate {
+            local: "develop".into(),
+            to: "refs/remotes/origin/develop".into(),
+        };
+
+        // Not checked out yet: switched to and fast-forwarded.
+        op().run(&dir, None).unwrap();
+        assert_eq!(g(&["symbolic-ref", "--short", "HEAD"]), "develop");
+        assert_eq!(g(&["rev-parse", "HEAD"]), newer);
+
+        // Already on it, the remote moved on: pulled in.
+        g(&["switch", "-qc", "tmp"]);
+        std::fs::write(dir.join("more.txt"), "x\n").unwrap();
+        g(&["add", "-A"]);
+        g(&["commit", "-qm", "more"]);
+        let more = g(&["rev-parse", "HEAD"]);
+        g(&["update-ref", "refs/remotes/origin/develop", &more]);
+        g(&["switch", "-q", "develop"]);
+        op().run(&dir, None).unwrap();
+        assert_eq!(g(&["rev-parse", "HEAD"]), more);
+
+        // Ahead of the remote: only checked out, nothing moved.
+        g(&["switch", "-q", "main"]);
+        g(&["update-ref", "refs/remotes/origin/develop", &newer]);
+        op().run(&dir, None).unwrap();
+        assert_eq!(g(&["symbolic-ref", "--short", "HEAD"]), "develop");
+        assert_eq!(g(&["rev-parse", "HEAD"]), more);
+
+        // Diverged: only checked out.
+        g(&["switch", "-q", "main"]);
+        g(&["update-ref", "refs/remotes/origin/develop", &base]);
+        std::fs::write(dir.join("other.txt"), "x\n").unwrap();
+        g(&["add", "-A"]);
+        g(&["commit", "-qm", "other"]);
+        let other = g(&["rev-parse", "HEAD"]);
+        g(&["update-ref", "refs/remotes/origin/develop", &other]);
+        op().run(&dir, None).unwrap();
+        assert_eq!(g(&["symbolic-ref", "--short", "HEAD"]), "develop");
+        assert_eq!(g(&["rev-parse", "HEAD"]), more);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
