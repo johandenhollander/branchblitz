@@ -51,7 +51,7 @@ Download the package for your system from the [latest release](https://github.co
 | Debian, Ubuntu | `branchblitz_<version>_amd64.deb` / `_arm64.deb` | `sudo apt install ./branchblitz_*.deb` |
 | Any Linux | `branchblitz-<version>-<arch>.AppImage` | `chmod +x` it and run it |
 | Any Linux | `branchblitz-<version>-linux-<arch>.tar.gz` | unpack, run `./install.sh` (installs to `~/.local`) |
-| macOS | `BranchBlitz-<version>-macos-<arch>.zip` | unzip, move BranchBlitz.app to Applications |
+| macOS | `BranchBlitz-<version>-macos.zip` (Apple Silicon and Intel) | unzip, move BranchBlitz.app to Applications |
 | Windows | `branchblitz-<version>-windows-x86_64.zip` | unzip, run `branchblitz.exe` |
 
 The macOS and Windows builds are not signed. macOS: the first time, right-click BranchBlitz.app and choose
@@ -158,7 +158,7 @@ Performance: `scripts/perf.sh` measures loading, graph layout, frame times, memo
 generated large repository (`scripts/perf-repo.sh`) and writes `perf/<version>.json`, compared with the
 previous release; run it on the same machine before each release.
 Release packages: `scripts/package-linux.sh` (.tar.gz, .deb via `cargo deb`, AppImage) and
-`scripts/package-macos.sh <target>` write to `dist/`; `.github/workflows/release.yml` runs them for a `v*` tag
+`scripts/package-macos.sh` (universal .app) write to `dist/`; `.github/workflows/release.yml` runs them for a `v*` tag
 and creates a draft release.
 `scripts/demo-repo.sh [dir]` builds a throwaway repository with a remote, branches, merges, a tag and
 uncommitted changes (default `/tmp/bbdemo`). The render tests drive the real UI against it (the merge test

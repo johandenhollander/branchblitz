@@ -45,22 +45,19 @@ jobs:
           name: linux-${{ matrix.runner }}
           path: dist/*
 
-  # BranchBlitz.app (unsigned) for Apple Silicon and Intel.
+  # A universal BranchBlitz.app (unsigned) for Apple Silicon and Intel.
   macos:
     needs: check
-    strategy:
-      matrix:
-        target: [aarch64-apple-darwin, x86_64-apple-darwin]
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
-      - run: scripts/package-macos.sh ${{ matrix.target }}
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - run: scripts/package-macos.sh
       - uses: actions/upload-artifact@v7
         with:
-          name: macos-${{ matrix.target }}
+          name: macos
           path: dist/*
 
   # A .zip with branchblitz.exe (unsigned).

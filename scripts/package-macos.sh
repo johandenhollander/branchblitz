@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
-# Builds dist/BranchBlitz-<version>-macos-<arch>.zip: BranchBlitz.app for one target
-# (aarch64-apple-darwin or x86_64-apple-darwin). Run on macOS from the repository root. Unsigned:
+# Builds dist/BranchBlitz-<version>-macos.zip: a universal BranchBlitz.app (Apple Silicon and Intel in
+# one binary, so nobody runs the Intel build under Rosetta by mistake: its git calls then fail in the
+# x86_64 xcrun shim). Run on macOS from the repository root. Unsigned:
 # the first start needs right-click, Open (or `xattr -dr com.apple.quarantine BranchBlitz.app`).
 set -euo pipefail
-target=${1:?usage: package-macos.sh <target triple>}
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-arch=${target%%-*}
 out=dist
 mkdir -p "$out"
 
-cargo build --profile dist --locked --target "$target"
+targets=(aarch64-apple-darwin x86_64-apple-darwin)
+for target in "${targets[@]}"; do
+    cargo build --profile dist --locked --target "$target"
+done
 
 stage=$(mktemp -d)
 app="$stage/BranchBlitz.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp "target/$target/dist/branchblitz" "$app/Contents/MacOS/branchblitz"
+lipo -create -output "$app/Contents/MacOS/branchblitz" \
+    target/aarch64-apple-darwin/dist/branchblitz target/x86_64-apple-darwin/dist/branchblitz
 
 # The icon: an .icns from the PNG sizes.
 iconset="$stage/AppIcon.iconset"
@@ -46,6 +49,6 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-ditto -c -k --keepParent "$app" "$out/BranchBlitz-$version-macos-$arch.zip"
+ditto -c -k --keepParent "$app" "$out/BranchBlitz-$version-macos.zip"
 rm -rf "$stage"
 ls -l "$out"
