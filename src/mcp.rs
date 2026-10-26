@@ -2966,6 +2966,43 @@ mod tests {
         let (err, out) = call(&mut s, "drag", json!({"label": "work", "to": "other"}));
         assert!(!err, "{out}");
         assert_eq!(names(&mut s), ["other", "work"]);
+        // Halfway through a drag the tab floats with the pointer; nothing moves until the drop.
+        let h = s.session.as_mut().unwrap();
+        let from = target(h, &json!({"label": "work"})).unwrap();
+        h.event(Event::PointerMoved(from));
+        h.step();
+        h.event(Event::PointerButton {
+            pos: from,
+            button: PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        });
+        h.step();
+        for k in 1..=6 {
+            h.event(Event::PointerMoved(
+                from + egui::vec2(-12.0 * k as f32, 3.0),
+            ));
+            h.step();
+        }
+        let shot = s.call("screenshot", &json!({}));
+        if std::env::var_os("BB_SAVE_SHOTS").is_some()
+            && let Some(d) = shot["content"][0]["data"].as_str()
+        {
+            let png = base64::engine::general_purpose::STANDARD.decode(d).unwrap();
+            std::fs::write(std::env::temp_dir().join("bb-tab-drag.png"), png).unwrap();
+        }
+        assert_eq!(names(&mut s), ["other", "work"]);
+        let h = s.session.as_mut().unwrap();
+        h.event(Event::PointerMoved(from));
+        h.step();
+        h.event(Event::PointerButton {
+            pos: from,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        });
+        h.step();
+        assert_eq!(names(&mut s), ["other", "work"], "dropped in place");
         // `other` was opened last, so it stays the active tab, now first.
         let h = s.session.as_mut().unwrap();
         assert_eq!(h.state_mut().active_tab_name().as_deref(), Some("other"));

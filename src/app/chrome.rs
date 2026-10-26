@@ -57,6 +57,57 @@ impl BranchBlitz {
                     sw: 0,
                     se: 0,
                 };
+                let yc = rect.center().y;
+                // Dragged: an outlined, empty slot stays behind and a copy of the tab floats
+                // with the pointer.
+                if dragging == Some(i) {
+                    ui.painter().rect(
+                        rect.shrink(1.0),
+                        r,
+                        pal.hover,
+                        egui::Stroke::new(1.0, pal.accent),
+                        egui::StrokeKind::Inside,
+                    );
+                    let g = ui.painter().layout_job(ds::text_job(
+                        &name,
+                        12.5,
+                        500.0,
+                        pal.text_subtle,
+                        false,
+                    ));
+                    let x = rect.left() + 12.0 + dot_w;
+                    ui.painter()
+                        .galley(egui::pos2(x, yc - g.size().y / 2.0), g, pal.text_subtle);
+                    let delta = ui.input(|inp| {
+                        inp.pointer
+                            .latest_pos()
+                            .zip(inp.pointer.press_origin())
+                            .map(|(now, start)| now - start)
+                    });
+                    let ghost = rect.translate(delta.unwrap_or_default());
+                    let lp = ui.ctx().layer_painter(egui::LayerId::new(
+                        egui::Order::Tooltip,
+                        egui::Id::unique("bb-tab-ghost"),
+                    ));
+                    let all = egui::CornerRadius::same(theme::RADIUS_MD);
+                    lp.add(ui.visuals().popup_shadow.as_shape(ghost, all));
+                    lp.rect(
+                        ghost,
+                        all,
+                        pal.raised,
+                        egui::Stroke::new(1.0, pal.border_strong),
+                        egui::StrokeKind::Inside,
+                    );
+                    let gy = ghost.center().y;
+                    let mut x = ghost.left() + 12.0;
+                    if flagged {
+                        lp.circle_filled(egui::pos2(x + 3.0, gy), 3.0, pal.warning);
+                        x += dot_w;
+                    }
+                    let g = lp.layout_job(ds::text_job(&name, 12.5, 500.0, pal.text, false));
+                    lp.galley(egui::pos2(x, gy - g.size().y / 2.0), g, pal.text);
+                    continue;
+                }
                 let p = ui.painter();
                 let busy = !tab.running.is_empty();
                 if active {
@@ -79,7 +130,6 @@ impl BranchBlitz {
                 if !active && hovered_before {
                     p.rect_filled(rect, r, pal.hover);
                 }
-                let yc = rect.center().y;
                 let mut x = rect.left() + 12.0;
                 if flagged {
                     p.circle_filled(egui::pos2(x + 3.0, yc), 3.0, pal.warning);
