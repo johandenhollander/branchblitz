@@ -2941,6 +2941,44 @@ mod tests {
         }
     }
 
+    /// Two branches on one commit: the checked out one is the chip on the right, by its dot.
+    #[test]
+    fn checked_out_branch_chip_is_on_the_right() {
+        let mut s = Server::default();
+        call(&mut s, "demo_repo", json!({}));
+        let work = s.demo_dirs[0].join("work");
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&work)
+            .args(["branch", "aa-side"])
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(ok.status.success());
+        call(&mut s, "key", json!({"key": "F5"}));
+        call(&mut s, "wait_idle", json!({}));
+        let h = s.session.as_mut().unwrap();
+        let side = target(h, &json!({"label": "aa-side", "nth": 0})).unwrap();
+        let (_, w) = call(
+            &mut s,
+            "widgets",
+            json!({"label": "feature/PROJ-523-ai-search", "role": "Button"}),
+        );
+        let h = s.session.as_mut().unwrap();
+        // The graph's chip: on the same row as the side branch's.
+        let head = (0..4)
+            .filter_map(|nth| {
+                target(
+                    h,
+                    &json!({"label": "feature/PROJ-523-ai-search", "nth": nth}),
+                )
+                .ok()
+            })
+            .find(|p| (p.y - side.y).abs() < 1.0)
+            .unwrap_or_else(|| panic!("{w}"));
+        assert!(head.x > side.x, "head {head:?} side {side:?}");
+    }
+
     /// Tabs are rearranged by dragging one onto another; the active tab stays active.
     #[test]
     fn tabs_reorder_by_dragging() {

@@ -914,7 +914,12 @@ pub fn graph_view(
                     Stroke::new(1.0, color.gamma_multiply(0.6)),
                 );
             } else if let Some(idxs) = refs_at.get(&c.sha) {
-                let pills = pills_for(idxs, data);
+                let mut pills = pills_for(idxs, data);
+                // Two chips: the checked out branch on the right, next to its dot, where it
+                // keeps its full name.
+                if pills.len() == 2 && pills[0].kind.head {
+                    pills.swap(0, 1);
+                }
                 let shown = if pills.len() > 2 { 1 } else { pills.len() };
                 let more = pills.len() - shown;
                 // Width of "+N" and its gap, kept free at the right.
