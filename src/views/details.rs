@@ -638,8 +638,8 @@ fn row_actions(
     out
 }
 
-/// Summary (72-character countdown) and description, Amend, and one full-width button that
-/// says what is missing or what will happen.
+/// Commit message (72-character countdown) and description, either one enough, Amend, and one
+/// full-width button that says what is missing or what will happen.
 fn commit_area(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<Action>) {
     let Some(data) = tab.data.as_ref() else {
         return;
@@ -686,7 +686,7 @@ fn commit_area(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<Act
                             egui::TextEdit::singleline(&mut tab.commit_msg)
                                 .id(summary_id)
                                 .frame(egui::Frame::NONE)
-                                .hint_text(RichText::new("Summary").color(pal.text_subtle))
+                                .hint_text(RichText::new("Commit message").color(pal.text_subtle))
                                 .align(egui::Align2::LEFT_CENTER),
                         );
                         let (r, _) =
@@ -737,19 +737,21 @@ fn commit_area(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<Act
                     );
                 });
             });
-            let has_summary = !tab.commit_msg.trim().is_empty();
+            // Either field will do: some people only write the description.
+            let has_message =
+                !tab.commit_msg.trim().is_empty() || !tab.commit_body.trim().is_empty();
             let label = if tab.amend {
                 "Amend last commit".to_string()
             } else if staged == 0 {
                 "Stage files to commit".to_string()
-            } else if !has_summary {
-                "Write a summary to commit".to_string()
+            } else if !has_message {
+                "Write a message to commit".to_string()
             } else if staged == 1 {
                 "Commit 1 file".to_string()
             } else {
                 format!("Commit {staged} files")
             };
-            let can_commit = has_summary && (staged > 0 || tab.amend) && !conflicts;
+            let can_commit = has_message && (staged > 0 || tab.amend) && !conflicts;
             let ctrl_enter =
                 focused && ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Enter));
             let clicked = ds::Button::new(label)
@@ -768,11 +770,13 @@ fn commit_area(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<Act
         });
 }
 
-/// Summary and description as one message, separated by a blank line.
+/// Summary and description as one message, separated by a blank line. Without a summary the
+/// description is the whole message.
 fn commit_message(summary: &str, body: &str) -> String {
-    match body.trim() {
-        "" => summary.trim().to_string(),
-        body => format!("{}\n\n{body}", summary.trim()),
+    match (summary.trim(), body.trim()) {
+        (summary, "") => summary.to_string(),
+        ("", body) => body.to_string(),
+        (summary, body) => format!("{summary}\n\n{body}"),
     }
 }
 
@@ -787,5 +791,6 @@ mod tests {
             commit_message("Fix it", "\nWhy.\n\nMore.\n"),
             "Fix it\n\nWhy.\n\nMore."
         );
+        assert_eq!(commit_message("  ", "\nFix it\n\nWhy.\n"), "Fix it\n\nWhy.");
     }
 }

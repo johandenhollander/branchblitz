@@ -1069,6 +1069,42 @@ mod tests {
         assert!(t.commit_msg.is_empty() && t.commit_body.is_empty());
     }
 
+    /// A file staged in a terminal shows up without F5 or a focus change, and a description
+    /// alone (no summary) is enough to commit.
+    #[test]
+    fn notices_an_outside_stage_and_commits_a_description() {
+        let mut s = Server::default();
+        call(&mut s, "demo_repo", json!({}));
+        call(&mut s, "wait_idle", json!({}));
+        let dir = s.demo_dirs[0].join("work");
+        let staged = |s: &mut Server| {
+            let h = s.session.as_mut().unwrap();
+            h.step();
+            h.state_mut().tabs_mut()[0]
+                .data
+                .as_ref()
+                .map_or(0, |d| d.status.staged.len())
+        };
+        assert_eq!(staged(&mut s), 0);
+        std::fs::write(dir.join("outside.txt"), "x\n").unwrap();
+        crate::git::git(&dir, &["add", "outside.txt"]).unwrap();
+        let t = std::time::Instant::now();
+        while staged(&mut s) != 1 {
+            assert!(t.elapsed().as_secs() < 5, "outside stage not noticed");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        call(&mut s, "click", json!({"label": "WIP"}));
+        let h = s.session.as_mut().unwrap();
+        h.state_mut().tabs_mut()[0].commit_body = "Only a description\n\nWhy.\n".into();
+        h.step();
+        let (err, out) = call(&mut s, "click", json!({ "label": "Commit 1 file" }));
+        assert!(!err, "{out}");
+        call(&mut s, "wait_idle", json!({}));
+        let head = crate::git::git(&dir, &["log", "-1", "--format=%B"]).unwrap();
+        assert_eq!(head.trim_end(), "Only a description\n\nWhy.");
+    }
+
     /// After a fetch BranchBlitz knows which tags are on the remote; only the others are drawn
     /// as unpushed (dashed).
     #[test]

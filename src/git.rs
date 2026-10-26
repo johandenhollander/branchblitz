@@ -1159,6 +1159,50 @@ fn load_status(repo: &Path) -> Result<WorkStatus, String> {
     Ok(st)
 }
 
+/// Files and directories git touches when another program stages, commits, checks out, moves a
+/// ref or starts a merge/rebase. Their stat is the cheap way to notice that (see `fingerprint`).
+/// Edits to tracked files that are not staged don't show here.
+pub fn watch_paths(repo: &Path) -> Result<Vec<PathBuf>, String> {
+    const WATCHED: &[&str] = &[
+        "index",
+        "HEAD",
+        "logs/HEAD",
+        "packed-refs",
+        "refs/heads",
+        "refs/tags",
+        "refs/remotes",
+        "refs/stash",
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "rebase-merge",
+        "rebase-apply",
+    ];
+    let mut args = vec!["rev-parse"];
+    for p in WATCHED {
+        args.extend(["--git-path", p]);
+    }
+    Ok(git(repo, &args)?
+        .lines()
+        .map(|l| {
+            let p = PathBuf::from(l.trim());
+            if p.is_relative() { repo.join(p) } else { p }
+        })
+        .collect())
+}
+
+/// Size and modification time of each of `paths` (`None` when missing): changes when the
+/// repository changed outside the app.
+pub fn fingerprint(paths: &[PathBuf]) -> Vec<Option<(std::time::SystemTime, u64)>> {
+    paths
+        .iter()
+        .map(|p| {
+            let m = std::fs::metadata(p).ok()?;
+            Some((m.modified().ok()?, m.len()))
+        })
+        .collect()
+}
+
 fn load_state(repo: &Path) -> RepoState {
     let exists = |p: &str| {
         git(repo, &["rev-parse", "--git-path", p])
