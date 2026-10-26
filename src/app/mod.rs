@@ -155,6 +155,8 @@ pub enum Action {
     SetPullMode(Option<git::PullMode>),
     /// "Amend previous commit" was switched on or off.
     Amend(bool),
+    /// Ask for the branches to set up git flow with.
+    FlowInit,
 }
 
 #[derive(Clone)]
@@ -168,6 +170,10 @@ pub enum InputKind {
     },
     Rename {
         old: String,
+    },
+    /// The name of a new git-flow branch, without its prefix.
+    FlowStart {
+        kind: git::FlowKind,
     },
 }
 
@@ -196,6 +202,12 @@ enum Modal {
         busy: bool,
         error: Option<String>,
         focus: bool,
+    },
+    /// Set up git flow: the production and the development branch.
+    FlowInit {
+        tab: u64,
+        master: String,
+        develop: String,
     },
 }
 

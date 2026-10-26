@@ -389,6 +389,7 @@ mod tests {
                 master: Some("production".into()),
                 develop: None,
                 prefixes: vec![("feature".into(), "feat-".into())],
+                ..Default::default()
             },
             remote_tags: None,
         };

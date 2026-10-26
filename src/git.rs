@@ -378,6 +378,41 @@ pub struct GitFlow {
     pub develop: Option<String>,
     /// (`feature`, configured prefix such as `feat-`) for feature, bugfix, release, hotfix, support.
     pub prefixes: Vec<(String, String)>,
+    /// Prefix of the tag a finished release or hotfix gets (`v`), often empty.
+    pub versiontag: String,
+}
+
+/// The kinds of git-flow branch BranchBlitz starts and finishes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FlowKind {
+    Feature,
+    Bugfix,
+    Release,
+    Hotfix,
+}
+
+impl FlowKind {
+    pub const ALL: [FlowKind; 4] = [
+        FlowKind::Feature,
+        FlowKind::Bugfix,
+        FlowKind::Release,
+        FlowKind::Hotfix,
+    ];
+
+    /// `feature`, as in `gitflow.prefix.feature`.
+    pub fn name(self) -> &'static str {
+        match self {
+            FlowKind::Feature => "feature",
+            FlowKind::Bugfix => "bugfix",
+            FlowKind::Release => "release",
+            FlowKind::Hotfix => "hotfix",
+        }
+    }
+
+    /// Releases and hotfixes end on master with a tag; features and bugfixes on develop.
+    pub fn ships(self) -> bool {
+        matches!(self, FlowKind::Release | FlowKind::Hotfix)
+    }
 }
 
 impl GitFlow {
@@ -391,6 +426,7 @@ impl GitFlow {
             match key {
                 "gitflow.branch.master" | "gitflow.branch.main" => flow.master = Some(value),
                 "gitflow.branch.develop" => flow.develop = Some(value),
+                "gitflow.prefix.versiontag" => flow.versiontag = value,
                 k => {
                     if let Some(kind) = k.strip_prefix("gitflow.prefix.")
                         && ["feature", "bugfix", "release", "hotfix", "support"].contains(&kind)
@@ -420,6 +456,52 @@ impl GitFlow {
         }
         branch.to_string()
     }
+
+    /// `git flow init` has run: both long-lived branches are configured.
+    pub fn configured(&self) -> bool {
+        self.master.is_some() && self.develop.is_some()
+    }
+
+    /// The configured prefix for `kind`, else git-flow's default (`feature/`).
+    pub fn prefix(&self, kind: FlowKind) -> String {
+        self.prefixes
+            .iter()
+            .find(|(k, _)| k == kind.name())
+            .map(|(_, p)| p.clone())
+            .unwrap_or_else(|| format!("{}/", kind.name()))
+    }
+
+    /// The branch a `kind` branch starts from: master for hotfixes, else develop.
+    pub fn base(&self, kind: FlowKind) -> Option<&str> {
+        match kind {
+            FlowKind::Hotfix => self.master.as_deref(),
+            _ => self.develop.as_deref(),
+        }
+    }
+
+    /// The kind and name of a flow branch (`feature/login` → Feature, `login`), when configured.
+    pub fn kind_of<'a>(&self, branch: &'a str) -> Option<(FlowKind, &'a str)> {
+        if !self.configured() {
+            return None;
+        }
+        FlowKind::ALL.into_iter().find_map(|k| {
+            branch
+                .strip_prefix(self.prefix(k).as_str())
+                .filter(|rest| !rest.is_empty())
+                .map(|rest| (k, rest))
+        })
+    }
+}
+
+/// The repository's git-flow configuration. Exit status 1 just means "not configured".
+fn load_flow(repo: &Path) -> GitFlow {
+    GitFlow::parse(
+        &git_lenient(
+            repo,
+            &["config", "--get-regexp", r"^gitflow\.(branch|prefix)\."],
+        )
+        .unwrap_or_default(),
+    )
 }
 
 impl RepoData {
@@ -504,14 +586,7 @@ pub fn load(repo: &Path, limit: usize) -> Result<RepoData, String> {
         .filter(|s| !s.is_empty());
 
     let (refs, default_branches) = load_refs(repo, &remotes)?;
-    // Exit status 1 just means "not configured".
-    let flow = GitFlow::parse(
-        &git_lenient(
-            repo,
-            &["config", "--get-regexp", r"^gitflow\.(branch|prefix)\."],
-        )
-        .unwrap_or_default(),
-    );
+    let flow = load_flow(repo);
     let commits = if refs.is_empty() && head_sha.is_none() {
         Vec::new()
     } else {
@@ -1344,6 +1419,23 @@ pub enum Op {
         pull: Option<(String, String)>,
         then: Box<Op>,
     },
+    /// `git flow init` without git-flow: the branch roles and default prefixes in the repository
+    /// config; `develop` is created from `master` when missing.
+    FlowInit {
+        master: String,
+        develop: String,
+    },
+    /// Creates `<prefix><name>` from develop (master for a hotfix) and checks it out.
+    FlowStart {
+        kind: FlowKind,
+        name: String,
+    },
+    /// Merges a flow branch (`--no-ff`) where it belongs, tags releases and hotfixes, deletes it.
+    /// Stops on conflicts in the merge state; running it again after the merge commit carries on
+    /// where it stopped (finished steps are skipped).
+    FlowFinish {
+        branch: String,
+    },
 }
 
 impl Op {
@@ -1400,6 +1492,9 @@ impl Op {
                 Op::Merge { what, .. } => format!("Merge {what} into {branch}"),
                 other => other.label(),
             },
+            Op::FlowInit { .. } => "Initialize git flow".into(),
+            Op::FlowStart { kind, name } => format!("Start {} {name}", kind.name()),
+            Op::FlowFinish { branch } => format!("Finish {branch}"),
         }
     }
 
@@ -1438,6 +1533,9 @@ impl Op {
                 v.extend(then.names());
                 v
             }
+            Op::FlowInit { master, develop } => vec![master, develop],
+            Op::FlowStart { name, .. } => vec![name],
+            Op::FlowFinish { branch } => vec![branch],
             _ => vec![],
         }
     }
@@ -1700,8 +1798,131 @@ impl Op {
                 }
                 Ok(out + &then.run(repo, data)?)
             }
+            Op::FlowInit { master, develop } => {
+                if master == develop {
+                    return Err("master and develop must be different branches".into());
+                }
+                g(&[
+                    "rev-parse",
+                    "--verify",
+                    "-q",
+                    &format!("refs/heads/{master}"),
+                ])
+                .map_err(|_| format!("There is no local branch {master}"))?;
+                let mut out = String::new();
+                if g(&[
+                    "rev-parse",
+                    "--verify",
+                    "-q",
+                    &format!("refs/heads/{develop}"),
+                ])
+                .is_err()
+                {
+                    out += &g(&["branch", develop, master])?;
+                }
+                let mut config = vec![
+                    ("gitflow.branch.master", master.as_str()),
+                    ("gitflow.branch.develop", develop.as_str()),
+                    ("gitflow.prefix.feature", "feature/"),
+                    ("gitflow.prefix.bugfix", "bugfix/"),
+                    ("gitflow.prefix.release", "release/"),
+                    ("gitflow.prefix.hotfix", "hotfix/"),
+                    ("gitflow.prefix.support", "support/"),
+                ];
+                // Keep a version tag prefix configured earlier (`v`).
+                if g(&["config", "--get", "gitflow.prefix.versiontag"]).is_err() {
+                    config.push(("gitflow.prefix.versiontag", ""));
+                }
+                for (key, value) in config {
+                    g(&["config", key, value])?;
+                }
+                Ok(out)
+            }
+            Op::FlowStart { kind, name } => {
+                let flow = load_flow(repo);
+                let base = flow
+                    .base(*kind)
+                    .ok_or("Git flow is not initialized in this repository")?;
+                let branch = format!("{}{name}", flow.prefix(*kind));
+                g(&["switch", "-c", &branch, base])
+            }
+            Op::FlowFinish { branch } => flow_finish(repo, branch),
         }
     }
+}
+
+/// [`Op::FlowFinish`]: each step is skipped when already done, so after resolving a conflict
+/// and committing the merge, finishing again carries on.
+fn flow_finish(repo: &Path, branch: &str) -> Result<String, String> {
+    let g = |args: &[&str]| git(repo, args);
+    if load_state(repo) != RepoState::Clean {
+        return Err("Finish or abort the operation in progress first".into());
+    }
+    let flow = load_flow(repo);
+    let Some((kind, name)) = flow.kind_of(branch) else {
+        return Err(format!("{branch} is not a git flow branch"));
+    };
+    let (Some(master), Some(develop)) = (flow.master.as_deref(), flow.develop.as_deref()) else {
+        return Err("Git flow is not initialized in this repository".into());
+    };
+    g(&[
+        "rev-parse",
+        "--verify",
+        "-q",
+        &format!("refs/heads/{branch}"),
+    ])
+    .map_err(|_| format!("There is no local branch {branch}"))?;
+    if !g(&["status", "--porcelain", "--untracked-files=no"])?
+        .trim()
+        .is_empty()
+    {
+        return Err(format!(
+            "Commit or stash your changes before finishing {branch}"
+        ));
+    }
+    let ancestor = |a: &str, b: &str| g(&["merge-base", "--is-ancestor", a, b]).is_ok();
+    let mut out = String::new();
+    let merge = |what: &str, into: &str, out: &mut String| -> Result<(), String> {
+        if ancestor(what, into) {
+            return Ok(());
+        }
+        *out += &g(&["switch", into])?;
+        *out += &g(&["merge", "--no-ff", "--no-edit", what]).map_err(|e| {
+            format!(
+                "{e}\n\nResolve the conflicts and commit the merge, then finish {branch} again."
+            )
+        })?;
+        Ok(())
+    };
+    // What develop must contain at the end: the branch, or for a release the tag on master.
+    let mut last = branch.to_string();
+    if kind.ships() {
+        merge(branch, master, &mut out)?;
+        let tag = format!("{}{name}", flow.versiontag);
+        if g(&["rev-parse", "--verify", "-q", &format!("refs/tags/{tag}")]).is_ok() {
+            if !ancestor(branch, &format!("refs/tags/{tag}")) {
+                return Err(format!(
+                    "Tag {tag} already exists and does not contain {branch}"
+                ));
+            }
+        } else {
+            let what = if kind == FlowKind::Hotfix {
+                "Hotfix"
+            } else {
+                "Release"
+            };
+            out += &g(&["tag", "-a", &tag, "-m", &format!("{what} {name}"), master])?;
+        }
+        last = format!("refs/tags/{tag}");
+    }
+    merge(&last, develop, &mut out)?;
+    // Not `-d`: that also wants the branch merged into its upstream, which finishing doesn't push.
+    out += &g(&["switch", develop])?;
+    if !ancestor(branch, develop) {
+        return Err(format!("{branch} is not merged into {develop}"));
+    }
+    out += &g(&["branch", "-D", branch])?;
+    Ok(out)
 }
 
 pub fn short(sha: &str) -> &str {
@@ -2177,6 +2398,216 @@ mod tests {
         assert_eq!(flow.canonical("dev"), "develop");
         assert_eq!(flow.canonical("feat-x"), "feature/x");
         assert_eq!(flow.canonical("other"), "other");
+        assert_eq!(flow.versiontag, "v");
+        assert_eq!(flow.kind_of("feat-x"), Some((FlowKind::Feature, "x")));
+        assert_eq!(
+            flow.kind_of("release/1.0"),
+            Some((FlowKind::Release, "1.0"))
+        );
+        assert_eq!(flow.kind_of("feat-"), None);
+        assert_eq!(flow.kind_of("main"), None);
+        assert_eq!(flow.base(FlowKind::Hotfix), Some("production"));
+        assert_eq!(flow.base(FlowKind::Bugfix), Some("dev"));
+        assert_eq!(
+            GitFlow::default().kind_of("feature/x"),
+            None,
+            "not configured"
+        );
+    }
+
+    fn rev(dir: &Path, r: &str) -> String {
+        git(dir, &["rev-parse", r]).unwrap().trim().to_string()
+    }
+
+    fn commit_file(dir: &Path, file: &str, text: &str, msg: &str) {
+        std::fs::write(dir.join(file), text).unwrap();
+        git(dir, &["add", file]).unwrap();
+        git(dir, &["commit", "-qm", msg]).unwrap();
+    }
+
+    fn flow_init(dir: &Path) {
+        Op::FlowInit {
+            master: "main".into(),
+            develop: "develop".into(),
+        }
+        .run(dir, None)
+        .unwrap();
+    }
+
+    #[test]
+    fn flow_init_configures_the_repo_and_creates_develop() {
+        let dir = repo("flowinit");
+        let init = |master: &str, develop: &str| {
+            Op::FlowInit {
+                master: master.into(),
+                develop: develop.into(),
+            }
+            .run(&dir, None)
+        };
+        assert!(init("main", "main").is_err());
+        assert!(init("nope", "develop").is_err());
+        assert!(init("main", "-develop").is_err());
+        assert!(!load_flow(&dir).configured(), "nothing written on failure");
+        git(&dir, &["config", "gitflow.prefix.versiontag", "v"]).unwrap();
+        init("main", "develop").unwrap();
+        assert_eq!(rev(&dir, "develop"), rev(&dir, "main"));
+        let flow = load_flow(&dir);
+        assert_eq!(flow.master.as_deref(), Some("main"));
+        assert_eq!(flow.develop.as_deref(), Some("develop"));
+        assert_eq!(flow.prefix(FlowKind::Hotfix), "hotfix/");
+        assert_eq!(flow.versiontag, "v", "an existing tag prefix is kept");
+        let d = load(&dir, 100).unwrap();
+        assert!(d.flow.configured());
+        // An existing develop is left where it is.
+        commit_file(&dir, "b.txt", "b\n", "on main");
+        init("main", "develop").unwrap();
+        assert_ne!(rev(&dir, "develop"), rev(&dir, "main"));
+    }
+
+    #[test]
+    fn flow_feature_starts_from_develop_and_finishes_into_it() {
+        let dir = repo("flowfeature");
+        flow_init(&dir);
+        let start = |kind, name: &str| {
+            Op::FlowStart {
+                kind,
+                name: name.into(),
+            }
+            .run(&dir, None)
+        };
+        assert!(start(FlowKind::Feature, "-x").is_err());
+        commit_file(&dir, "d.txt", "d\n", "on main only");
+        git(&dir, &["switch", "-q", "develop"]).unwrap();
+        commit_file(&dir, "dev.txt", "dev\n", "on develop");
+        git(&dir, &["switch", "-q", "main"]).unwrap();
+        start(FlowKind::Feature, "login").unwrap();
+        assert_eq!(
+            git(&dir, &["branch", "--show-current"]).unwrap().trim(),
+            "feature/login"
+        );
+        assert_eq!(rev(&dir, "HEAD"), rev(&dir, "develop"));
+        commit_file(&dir, "login.txt", "login\n", "login");
+        let tip = rev(&dir, "HEAD");
+        let main = rev(&dir, "main");
+
+        let finish = Op::FlowFinish {
+            branch: "feature/login".into(),
+        };
+        assert!(
+            Op::FlowFinish {
+                branch: "main".into()
+            }
+            .run(&dir, None)
+            .is_err()
+        );
+        std::fs::write(dir.join("a.txt"), "dirty\n").unwrap();
+        assert!(
+            finish
+                .run(&dir, None)
+                .unwrap_err()
+                .contains("Commit or stash")
+        );
+        git(&dir, &["checkout", "--", "a.txt"]).unwrap();
+        finish.run(&dir, None).unwrap();
+        assert_eq!(
+            git(&dir, &["branch", "--show-current"]).unwrap().trim(),
+            "develop"
+        );
+        assert!(
+            git(
+                &dir,
+                &["rev-parse", "--verify", "-q", "refs/heads/feature/login"]
+            )
+            .is_err()
+        );
+        // Always a merge commit (--no-ff).
+        assert_eq!(rev(&dir, "develop^2"), tip);
+        assert_eq!(rev(&dir, "main"), main, "main untouched");
+
+        // A hotfix starts from main.
+        start(FlowKind::Hotfix, "1.0.1").unwrap();
+        assert_eq!(rev(&dir, "HEAD"), main);
+    }
+
+    #[test]
+    fn flow_release_finishes_into_master_with_a_tag_and_back_into_develop() {
+        let dir = repo("flowrelease");
+        git(&dir, &["config", "gitflow.prefix.versiontag", "v"]).unwrap();
+        flow_init(&dir);
+        Op::FlowStart {
+            kind: FlowKind::Release,
+            name: "1.0".into(),
+        }
+        .run(&dir, None)
+        .unwrap();
+        commit_file(&dir, "version.txt", "1.0\n", "Bump version");
+        let tip = rev(&dir, "HEAD");
+        Op::FlowFinish {
+            branch: "release/1.0".into(),
+        }
+        .run(&dir, None)
+        .unwrap();
+        // master: a merge commit of the release, tagged (annotated).
+        assert_eq!(rev(&dir, "main^2"), tip);
+        assert_eq!(
+            git(&dir, &["cat-file", "-t", "v1.0"]).unwrap().trim(),
+            "tag"
+        );
+        assert_eq!(rev(&dir, "v1.0^{commit}"), rev(&dir, "main"));
+        assert!(
+            git(&dir, &["tag", "-n1", "-l", "v1.0"])
+                .unwrap()
+                .contains("Release 1.0")
+        );
+        // develop: the tagged master merged back.
+        assert_eq!(rev(&dir, "develop^2"), rev(&dir, "main"));
+        assert!(
+            git(
+                &dir,
+                &["rev-parse", "--verify", "-q", "refs/heads/release/1.0"]
+            )
+            .is_err()
+        );
+        assert_eq!(
+            git(&dir, &["branch", "--show-current"]).unwrap().trim(),
+            "develop"
+        );
+    }
+
+    #[test]
+    fn flow_finish_stops_on_conflicts_and_carries_on_after_the_merge() {
+        let dir = repo("flowconflict");
+        flow_init(&dir);
+        Op::FlowStart {
+            kind: FlowKind::Hotfix,
+            name: "1.0.1".into(),
+        }
+        .run(&dir, None)
+        .unwrap();
+        commit_file(&dir, "a.txt", "hotfix\n", "Fix");
+        git(&dir, &["switch", "-q", "develop"]).unwrap();
+        commit_file(&dir, "a.txt", "develop\n", "Change");
+        let finish = Op::FlowFinish {
+            branch: "hotfix/1.0.1".into(),
+        };
+        let err = finish.run(&dir, None).unwrap_err();
+        assert!(err.contains("CONFLICT"), "{err}");
+        assert!(err.contains("finish hotfix/1.0.1 again"), "{err}");
+        assert_eq!(load_state(&dir), RepoState::Merging);
+        assert!(finish.run(&dir, None).is_err(), "not while merging");
+        // master got its merge and tag before develop conflicted.
+        assert_eq!(rev(&dir, "1.0.1^{commit}"), rev(&dir, "main"));
+        commit_file(&dir, "a.txt", "both\n", "Merge");
+        finish.run(&dir, None).unwrap();
+        assert!(
+            git(
+                &dir,
+                &["rev-parse", "--verify", "-q", "refs/heads/hotfix/1.0.1"]
+            )
+            .is_err()
+        );
+        assert_eq!(git(&dir, &["tag", "-l"]).unwrap().trim(), "1.0.1");
+        assert!(git(&dir, &["merge-base", "--is-ancestor", "main", "develop"]).is_ok());
     }
 
     #[test]

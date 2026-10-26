@@ -103,6 +103,23 @@ impl BranchBlitz {
                         value,
                     });
                 }
+                Action::FlowInit => {
+                    let tab = &self.tabs[i];
+                    let has =
+                        |name: &str| tab.data.as_ref().is_some_and(|d| d.local(name).is_some());
+                    // git-flow's own guess: main or master, else the current branch.
+                    let master = ["main", "master"]
+                        .into_iter()
+                        .find(|b| has(b))
+                        .map(str::to_string)
+                        .or_else(|| tab.data.as_ref().and_then(|d| d.head_branch.clone()))
+                        .unwrap_or_default();
+                    self.modal = Some(Modal::FlowInit {
+                        tab: tab.id,
+                        master,
+                        develop: "develop".into(),
+                    });
+                }
                 Action::Copy(s) => self.ctx.copy_text(s),
                 Action::SwitchWorktree(path) => self.switch_worktree(i, &path),
                 Action::OpenRepo(path) => self.open_repo(&path, true),

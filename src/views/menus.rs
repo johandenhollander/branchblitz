@@ -4,6 +4,39 @@ use super::*;
 
 // ---------------------------------------------------------------- context menus
 
+/// "Finish feature login": merges the git-flow branch where it belongs (see [`Op::FlowFinish`]).
+pub fn flow_finish_item(
+    ui: &mut Ui,
+    pal: &Palette,
+    data: &RepoData,
+    kind: git::FlowKind,
+    branch: &str,
+    acts: &mut Vec<Action>,
+) {
+    let name = data.flow.kind_of(branch).map_or(branch, |(_, n)| n);
+    let develop = data.flow.develop.as_deref().unwrap_or("develop");
+    let full = if kind.ships() {
+        let master = data.flow.master.as_deref().unwrap_or("master");
+        format!(
+            "Finish {} {name}: merge into {master} and {develop}, tag {}{name}, delete {branch}",
+            kind.name(),
+            data.flow.versiontag
+        )
+    } else {
+        format!(
+            "Finish {} {name}: merge into {develop}, delete {branch}",
+            kind.name()
+        )
+    };
+    let text = format!("Finish {} {name}", kind.name());
+    if ds::menu_item(ui, pal, icons::GIT_MERGE, &text, Some(&full), false).clicked() {
+        acts.push(Action::Op(Op::FlowFinish {
+            branch: branch.to_string(),
+        }));
+        ui.close();
+    }
+}
+
 /// The menu for a branch, remote branch or tag. Visible labels are written relative to the
 /// current branch; the full description is the item's accessible name and tooltip.
 pub fn ref_menu(
@@ -139,6 +172,11 @@ pub fn ref_menu(
                     Action::Op(Op::Push { force: false }),
                     acts,
                 );
+            }
+            if let Some((kind, _)) = data.flow.kind_of(&r.name)
+                && data.worktree_of(&r.name).is_none()
+            {
+                flow_finish_item(ui, pal, data, kind, &r.name, acts);
             }
             if let Some(up) = &r.upstream {
                 // `git fetch .` won't move a branch checked out in another worktree.

@@ -193,8 +193,16 @@ impl BranchBlitz {
                             if e.contains("CONFLICT")
                                 && let Some(path) = first
                             {
-                                self.status_line =
-                                    Some((true, format!("{} stopped on conflicts", op.label())));
+                                let then = match &op {
+                                    Op::FlowFinish { .. } => {
+                                        "; commit the merge, then finish again"
+                                    }
+                                    _ => "",
+                                };
+                                self.status_line = Some((
+                                    true,
+                                    format!("{} stopped on conflicts{then}", op.label()),
+                                ));
                                 let tab = &mut self.tabs[i];
                                 tab.selected = Selection::Wip;
                                 tab.details = None;

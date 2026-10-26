@@ -400,6 +400,16 @@ impl BranchBlitz {
                     {
                         acts.push(Action::Op(Op::StashPop(None)));
                     }
+                    let flow = local("Git flow", icons::GIT_MERGE)
+                        .enabled(head_sha.is_some())
+                        .tooltip("Git flow: start and finish feature, release and hotfix branches")
+                        .show(ui, pal);
+                    if let Some(d) = data {
+                        egui::Popup::menu(&flow)
+                            .align(egui::RectAlign::BOTTOM_START)
+                            .gap(4.0)
+                            .show(|ui| flow_menu(ui, pal, d, &mut acts));
+                    }
                     ui.min_rect().width().round()
                 },
             )
@@ -750,6 +760,40 @@ fn branch_switcher(ui: &mut egui::Ui, pal: &Palette, tab: &RepoTab) -> Option<Ac
                 });
         });
     act
+}
+
+/// The toolbar's Git flow menu: set it up, start a branch, finish the checked out one.
+fn flow_menu(ui: &mut egui::Ui, pal: &Palette, data: &RepoData, acts: &mut Vec<Action>) {
+    ui.set_width(260.0);
+    if !data.flow.configured() {
+        if ds::menu_item(
+            ui,
+            pal,
+            icons::SETTINGS,
+            "Initialize git flow…",
+            None,
+            false,
+        )
+        .clicked()
+        {
+            acts.push(Action::FlowInit);
+            ui.close();
+        }
+        return;
+    }
+    for kind in git::FlowKind::ALL {
+        let text = format!("Start {}…", kind.name());
+        if ds::menu_item(ui, pal, icons::GIT_BRANCH_PLUS, &text, None, false).clicked() {
+            acts.push(Action::Input(InputKind::FlowStart { kind }));
+            ui.close();
+        }
+    }
+    if let Some(head) = &data.head_branch
+        && let Some((kind, _)) = data.flow.kind_of(head)
+    {
+        ds::menu_divider(ui, pal);
+        views::flow_finish_item(ui, pal, data, kind, head, acts);
+    }
 }
 
 fn pull_mode_label(mode: git::PullMode) -> &'static str {

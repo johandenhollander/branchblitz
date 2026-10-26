@@ -73,7 +73,9 @@ impl BranchBlitz {
         let mut browse_parent = false;
         let mut open_settings: Option<settings_view::Page> = None;
         let target_tab = match modal {
-            Modal::Input { tab, .. } => self.tabs.iter().position(|t| t.id == *tab),
+            Modal::Input { tab, .. } | Modal::FlowInit { tab, .. } => {
+                self.tabs.iter().position(|t| t.id == *tab)
+            }
             _ => None,
         };
         let data = target_tab
@@ -104,6 +106,7 @@ impl BranchBlitz {
                             }
                             InputKind::Tag { at } => format!("Create tag at {}", git::short(at)),
                             InputKind::Rename { old } => format!("Rename {old}"),
+                            InputKind::FlowStart { kind } => format!("Start {}", kind.name()),
                         };
                         ui.label(ds::title(title).color(pal.text));
                         let resp = ui.add_sized(
@@ -113,7 +116,27 @@ impl BranchBlitz {
                                 .align(egui::Align2::LEFT_CENTER),
                         );
                         resp.request_focus();
-                        let problem = new_ref_problem(data, value.trim());
+                        // A flow branch is named `<prefix><name>`: check the full name.
+                        let full = match kind {
+                            InputKind::FlowStart { kind } => {
+                                let flow = data.map(|d| &d.flow);
+                                let prefix = flow.map(|f| f.prefix(*kind)).unwrap_or_default();
+                                let base = flow.and_then(|f| f.base(*kind)).unwrap_or("develop");
+                                let full = format!("{prefix}{}", value.trim());
+                                ui.label(
+                                    RichText::new(format!("Creates {full} from {base}"))
+                                        .size(12.0)
+                                        .color(pal.text_muted),
+                                );
+                                full
+                            }
+                            _ => value.trim().to_string(),
+                        };
+                        let problem = if value.trim().is_empty() {
+                            new_ref_problem(data, "")
+                        } else {
+                            new_ref_problem(data, &full)
+                        };
                         let valid = problem.is_none();
                         if let Some(p) = problem.filter(|_| !value.trim().is_empty()) {
                             ui.horizontal(|ui| {
@@ -127,7 +150,11 @@ impl BranchBlitz {
                             });
                         }
                         actions(ui, &mut |ui| {
-                            let ok = ds::Button::new("Create")
+                            let verb = match kind {
+                                InputKind::FlowStart { .. } => "Start",
+                                _ => "Create",
+                            };
+                            let ok = ds::Button::new(verb)
                                 .primary()
                                 .enabled(valid)
                                 .show(ui, &pal)
@@ -149,6 +176,9 @@ impl BranchBlitz {
                                         old: old.clone(),
                                         new: name,
                                     },
+                                    InputKind::FlowStart { kind } => {
+                                        Op::FlowStart { kind: *kind, name }
+                                    }
                                 });
                             }
                             if ds::Button::new("Cancel").quiet().show(ui, &pal).clicked() {
@@ -333,6 +363,65 @@ impl BranchBlitz {
                             }
                         });
                     }
+                    Modal::FlowInit {
+                        master, develop, ..
+                    } => {
+                        ui.label(ds::title("Initialize git flow").color(pal.text));
+                        let field = |ui: &mut egui::Ui, text: &mut String, label: &str| {
+                            ui.label(RichText::new(label).size(12.0).color(pal.text_muted));
+                            let r = ui.add_sized(
+                                egui::vec2(ui.available_width(), ds::CONTROL_MD),
+                                egui::TextEdit::singleline(text).align(egui::Align2::LEFT_CENTER),
+                            );
+                            r.widget_info(|| {
+                                egui::WidgetInfo::labeled(egui::Role::TextInput, true, label)
+                            });
+                        };
+                        field(ui, master, "Production branch");
+                        field(ui, develop, "Development branch");
+                        let (m, d) = (master.trim(), develop.trim());
+                        let has = |b: &str| data.is_some_and(|data| data.local(b).is_some());
+                        let problem = if !has(m) {
+                            Some(format!("There is no local branch {m}"))
+                        } else if m == d {
+                            Some("Use two different branches".into())
+                        } else if has(d) {
+                            None
+                        } else {
+                            ref_name_problem(d).map(str::to_string)
+                        };
+                        let note = match &problem {
+                            Some(p) => RichText::new(p.as_str()).color(pal.danger),
+                            None if has(d) => RichText::new(
+                                "Branches start with feature/, bugfix/, release/ and hotfix/.",
+                            )
+                            .color(pal.text_muted),
+                            None => RichText::new(format!(
+                                "Creates {d} from {m}. Branches start with feature/, bugfix/, \
+                                 release/ and hotfix/."
+                            ))
+                            .color(pal.text_muted),
+                        };
+                        ui.add(egui::Label::new(note.size(12.0)).wrap());
+                        actions(ui, &mut |ui| {
+                            let valid = problem.is_none();
+                            if ds::Button::new("Initialize")
+                                .primary()
+                                .enabled(valid)
+                                .show(ui, &pal)
+                                .clicked()
+                                || (valid && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                            {
+                                submit = Some(Op::FlowInit {
+                                    master: m.to_string(),
+                                    develop: d.to_string(),
+                                });
+                            }
+                            if ds::Button::new("Cancel").quiet().show(ui, &pal).clicked() {
+                                close = true;
+                            }
+                        });
+                    }
                     // Drawn by `show_settings`.
                     Modal::Settings => {}
                 }
@@ -371,7 +460,9 @@ pub(super) fn modal_title(m: &Modal) -> String {
             InputKind::Branch { .. } => "Create branch".into(),
             InputKind::Tag { .. } => "Create tag".into(),
             InputKind::Rename { old } => format!("Rename {old}"),
+            InputKind::FlowStart { kind } => format!("Start {}", kind.name()),
         },
+        Modal::FlowInit { .. } => "Initialize git flow".into(),
         Modal::Settings => "Settings".into(),
         Modal::Clone { .. } => "Clone repository".into(),
         Modal::Notice { title, .. } => title.clone(),

@@ -3108,6 +3108,87 @@ mod tests {
         assert!(!dir.exists());
     }
 
+    /// Git flow from the toolbar: initialize, start a feature; finish a bugfix from its menu.
+    #[test]
+    fn git_flow_init_start_and_finish() {
+        let mut s = Server::default();
+        call(&mut s, "demo_repo", json!({}));
+        let state = |s: &mut Server| -> Value {
+            serde_json::from_str(&call(s, "state", json!({"commits": 0})).1).unwrap()
+        };
+        let locals = |s: &mut Server| -> Vec<String> {
+            state(s)["tabs"][0]["local_branches"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|b| b["name"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let click = |s: &mut Server, args: Value| {
+            let (err, out) = call(s, "click", args);
+            assert!(!err, "{out}");
+        };
+        let flow_menu = |s: &mut Server| click(s, json!({"label": "Git flow", "role": "Button"}));
+
+        // Not configured: only Initialize, with main and develop detected.
+        flow_menu(&mut s);
+        let (_, w) = call(&mut s, "widgets", json!({"label": "Start feature"}));
+        assert!(!w.contains("Start feature"), "{w}");
+        click(&mut s, json!({"label": "Initialize git flow…"}));
+        let st = state(&mut s);
+        assert_eq!(st["dialog"]["title"], json!("Initialize git flow"), "{st}");
+        assert_eq!(st["dialog"]["master"], json!("main"));
+        assert_eq!(st["dialog"]["develop"], json!("develop"));
+        save_shot(&mut s, "bb-flow-init.png");
+        click(&mut s, json!({"label": "Initialize", "role": "Button"}));
+        call(&mut s, "wait_idle", json!({}));
+        assert!(state(&mut s)["dialog"].is_null());
+
+        // Start a feature: named in a dialog, created from develop and checked out.
+        flow_menu(&mut s);
+        click(&mut s, json!({"label": "Start feature…"}));
+        let st = state(&mut s);
+        assert_eq!(st["dialog"]["title"], json!("Start feature"), "{st}");
+        call(&mut s, "type_text", json!({"text": "flow-ui"}));
+        save_shot(&mut s, "bb-flow-start.png");
+        call(&mut s, "key", json!({"key": "Enter"}));
+        call(&mut s, "wait_idle", json!({}));
+        let st = state(&mut s);
+        assert_eq!(
+            st["tabs"][0]["head_branch"],
+            json!("feature/flow-ui"),
+            "{st}"
+        );
+
+        // The current flow branch can be finished from the toolbar menu.
+        flow_menu(&mut s);
+        save_shot(&mut s, "bb-flow-menu.png");
+        let (_, w) = call(
+            &mut s,
+            "widgets",
+            json!({"label": "Finish feature flow-ui"}),
+        );
+        assert!(w.contains("merge into develop"), "{w}");
+        call(&mut s, "key", json!({"key": "Escape"}));
+
+        // Finish a bugfix from its context menu (with the demo's changes stashed first).
+        click(&mut s, json!({"label": "Stash", "role": "Button"}));
+        call(&mut s, "wait_idle", json!({}));
+        click(
+            &mut s,
+            json!({"label": "bugfix/PROJ-610", "button": "right", "nth": 0}),
+        );
+        click(
+            &mut s,
+            json!({"label": "Finish bugfix PROJ-610: merge into develop, delete bugfix/PROJ-610"}),
+        );
+        call(&mut s, "wait_idle", json!({}));
+        let st = state(&mut s);
+        assert_eq!(st["tabs"][0]["head_branch"], json!("develop"), "{st}");
+        assert!(st["status_line"]["ok"].as_bool().unwrap(), "{st}");
+        assert!(!locals(&mut s).contains(&"bugfix/PROJ-610".to_string()));
+    }
+
     #[test]
     fn view_and_input_tools() {
         let mut s = Server::default();
