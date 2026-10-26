@@ -6,25 +6,79 @@ impl BranchBlitz {
     pub(super) fn tab_bar(&mut self, ui: &mut egui::Ui, pal: &Palette) {
         let mut switch = None;
         let mut close = None;
-        // A tab being dragged to another place, and one dropped.
-        let (mut dragging, mut dropped) = (None, None);
-        let mut moved = None;
-        let mut rects = Vec::new();
         let animate = self.settings.animation_ms > 0;
+        let secs = self.settings.animation_ms.min(500) as f32 / 1000.0;
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
+            const GAP: f32 = 2.0;
+            ui.spacing_mut().item_spacing.x = GAP;
+            let tab_id = |ui: &egui::Ui, t: &RepoTab| ui.scope_id().with(("repo-tab", t.id));
+            let label = |t: &RepoTab| -> String {
+                if t.name.chars().count() > 24 {
+                    t.name.chars().take(23).chain(['…']).collect()
+                } else {
+                    t.name.clone()
+                }
+            };
+            // A merge, rebase or conflicts in progress: a warning dot before the name.
+            let flagged = |t: &RepoTab| {
+                t.data
+                    .as_ref()
+                    .is_some_and(|d| d.state != RepoState::Clean || !d.status.conflicted.is_empty())
+            };
+            let tab_w = |ui: &egui::Ui, t: &RepoTab| {
+                let g =
+                    ui.painter()
+                        .layout_job(ds::text_job(&label(t), 12.5, 500.0, pal.text, false));
+                let dot_w = if flagged(t) { 6.0 + 8.0 } else { 0.0 };
+                12.0 + dot_w + g.size().x + 8.0 + 18.0 + 8.0
+            };
+            // Dragging a tab: the others make room where it would land, which is remembered
+            // for the drop.
+            let drag_state = ui.scope_id().with("tab-drag");
+            let lifted = ui.input(|i| i.pointer.primary_down()).then(|| {
+                self.tabs
+                    .iter()
+                    .position(|t| ui.ctx().is_being_dragged(tab_id(ui, t)))
+            });
+            if lifted.flatten().is_none()
+                && let Some((from, to)) = ui
+                    .ctx()
+                    .data_mut(|d| d.remove_temp::<(usize, usize)>(drag_state))
+            {
+                // Dropped: the tabs already stand in their new order, now make it real.
+                self.move_tab(from, to);
+            }
+            let x0 = ui.cursor().left();
+            let widths: Vec<f32> = self.tabs.iter().map(|t| tab_w(ui, t)).collect();
+            let mut lefts: Vec<f32> = widths
+                .iter()
+                .scan(0.0, |x, w| {
+                    let l = *x;
+                    *x += w + GAP;
+                    Some(l)
+                })
+                .collect();
+            let mut delta = egui::Vec2::ZERO;
+            if let Some(Some(from)) = lifted {
+                delta = ui.input(|inp| {
+                    inp.pointer
+                        .latest_pos()
+                        .zip(inp.pointer.press_origin())
+                        .map(|(now, start)| now - start)
+                        .unwrap_or_default()
+                });
+                let center = lefts[from] + widths[from] / 2.0 + delta.x;
+                let (to, slots) = tab_slots(&widths, GAP, from, center);
+                lefts = slots;
+                ui.ctx().data_mut(|d| d.insert_temp(drag_state, (from, to)));
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            }
+            let dragging = lifted.flatten();
             for (i, tab) in self.tabs.iter().enumerate() {
                 let active = self.active == Some(i);
-                let name: String = if tab.name.chars().count() > 24 {
-                    tab.name.chars().take(23).chain(['…']).collect()
-                } else {
-                    tab.name.clone()
-                };
-                // A merge, rebase or conflicts in progress: a warning dot before the name.
-                let flagged = tab.data.as_ref().is_some_and(|d| {
-                    d.state != RepoState::Clean || !d.status.conflicted.is_empty()
-                });
-                let id = ui.scope_id().with(("repo-tab", tab.id));
+                let name = label(tab);
+                let flagged = flagged(tab);
+                let id = tab_id(ui, tab);
                 let hovered_before = ui.ctx().read_response(id).is_some_and(|r| r.hovered())
                     || ui
                         .ctx()
@@ -39,15 +93,14 @@ impl BranchBlitz {
                     .painter()
                     .layout_job(ds::text_job(&name, 12.5, 500.0, fg, false));
                 let dot_w = if flagged { 6.0 + 8.0 } else { 0.0 };
-                let w = 12.0 + dot_w + g.size().x + 8.0 + 18.0 + 8.0;
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 30.0), egui::Sense::hover());
+                let (natural, _) =
+                    ui.allocate_exact_size(egui::vec2(widths[i], 30.0), egui::Sense::hover());
+                // Drawn where it stands now, sliding there when the order changes.
+                let x = ui
+                    .ctx()
+                    .animate_value_with_time(id.with("x"), x0 + lefts[i], secs);
+                let rect = natural.translate(egui::vec2(x - natural.left(), 0.0));
                 let resp = ui.interact(rect, id, egui::Sense::click_and_drag());
-                rects.push(rect);
-                if resp.dragged_by(egui::PointerButton::Primary) {
-                    dragging = Some(i);
-                } else if resp.drag_stopped_by(egui::PointerButton::Primary) {
-                    dropped = Some(i);
-                }
                 resp.widget_info(|| {
                     egui::WidgetInfo::selected(egui::Role::Button, true, active, &tab.name)
                 });
@@ -78,13 +131,7 @@ impl BranchBlitz {
                     let x = rect.left() + 12.0 + dot_w;
                     ui.painter()
                         .galley(egui::pos2(x, yc - g.size().y / 2.0), g, pal.text_subtle);
-                    let delta = ui.input(|inp| {
-                        inp.pointer
-                            .latest_pos()
-                            .zip(inp.pointer.press_origin())
-                            .map(|(now, start)| now - start)
-                    });
-                    let ghost = rect.translate(delta.unwrap_or_default());
+                    let ghost = natural.translate(delta);
                     let lp = ui.ctx().layer_painter(egui::LayerId::new(
                         egui::Order::Tooltip,
                         egui::Id::unique("bb-tab-ghost"),
@@ -182,29 +229,6 @@ impl BranchBlitz {
                 }
                 resp.on_hover_text(tab.path.display().to_string());
             }
-            // While dragging: an accent line where the tab would go.
-            if let Some(from) = dragging.or(dropped)
-                && let Some(x) = ui.ctx().pointer_latest_pos().map(|p| p.x)
-            {
-                let to = rects.iter().filter(|r| r.center().x <= x).count();
-                if dragging.is_some() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                    if to != from && to != from + 1 {
-                        let lx = rects
-                            .get(to)
-                            .map(|r| r.left() - 1.0)
-                            .unwrap_or_else(|| rects[rects.len() - 1].right() + 1.0);
-                        let r = rects[from];
-                        ui.painter().vline(
-                            lx,
-                            r.y_range().shrink(4.0),
-                            egui::Stroke::new(2.0, pal.accent),
-                        );
-                    }
-                } else {
-                    moved = Some((from, to));
-                }
-            }
             let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::click());
             let rect = egui::Rect::from_center_size(
                 rect.center() - egui::vec2(0.0, 1.0),
@@ -235,9 +259,6 @@ impl BranchBlitz {
                 self.active = None;
             }
         });
-        if let Some((from, to)) = moved {
-            self.move_tab(from, to);
-        }
         if let Some(i) = close {
             self.close_tab(i);
         } else if let Some(i) = switch {
@@ -891,5 +912,48 @@ fn busy_text(label: &str) -> String {
         "Pull" => "Pulling…".into(),
         "Push" => "Pushing…".into(),
         other => format!("{other}…"),
+    }
+}
+
+/// Where the tabs stand while tab `from` is dragged with its centre at `center` (measured from
+/// the first tab's left edge): the place to move it to (as for `move_tab`) and each tab's left
+/// edge. The others make room as soon as the dragged tab passes their middle.
+fn tab_slots(widths: &[f32], gap: f32, from: usize, center: f32) -> (usize, Vec<f32>) {
+    let mut natural = Vec::with_capacity(widths.len());
+    let mut x = 0.0;
+    for w in widths {
+        natural.push(x);
+        x += w + gap;
+    }
+    let mut order: Vec<usize> = (0..widths.len()).filter(|&j| j != from).collect();
+    let k = order
+        .iter()
+        .filter(|&&j| natural[j] + widths[j] / 2.0 <= center)
+        .count();
+    order.insert(k, from);
+    let mut lefts = vec![0.0; widths.len()];
+    let mut x = 0.0;
+    for j in order {
+        lefts[j] = x;
+        x += widths[j] + gap;
+    }
+    (if k <= from { k } else { k + 1 }, lefts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tab_slots;
+
+    #[test]
+    fn dragged_tab_pushes_its_neighbours_aside() {
+        let w = [10.0, 20.0, 10.0];
+        // Not past a neighbour's middle: everything stays.
+        assert_eq!(tab_slots(&w, 0.0, 2, 36.0), (2, vec![0.0, 10.0, 30.0]));
+        // Past the middle of the tab on its left: that one moves right of it.
+        assert_eq!(tab_slots(&w, 0.0, 2, 19.0), (1, vec![0.0, 20.0, 10.0]));
+        // All the way left.
+        assert_eq!(tab_slots(&w, 0.0, 2, 1.0), (0, vec![10.0, 20.0, 0.0]));
+        // The first one to the end: `move_tab` counts the place before it was taken out.
+        assert_eq!(tab_slots(&w, 2.0, 0, 50.0), (3, vec![34.0, 0.0, 22.0]));
     }
 }

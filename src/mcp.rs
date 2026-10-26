@@ -2978,12 +2978,17 @@ mod tests {
             modifiers: Modifiers::NONE,
         });
         h.step();
-        for k in 1..=6 {
+        let other_x = target(h, &json!({"label": "other"})).unwrap().x;
+        for k in 1..=10 {
             h.event(Event::PointerMoved(
                 from + egui::vec2(-12.0 * k as f32, 3.0),
             ));
             h.step();
         }
+        // Past its middle: the other tab makes room on the right.
+        h.run_steps(20);
+        let pushed = target(h, &json!({"label": "other"})).unwrap().x;
+        assert!(pushed > other_x + 20.0, "{other_x} -> {pushed}");
         let shot = s.call("screenshot", &json!({}));
         if std::env::var_os("BB_SAVE_SHOTS").is_some()
             && let Some(d) = shot["content"][0]["data"].as_str()
