@@ -55,6 +55,20 @@ pub struct Settings {
     pub fetch_default: std::collections::HashSet<String>,
     /// Commit list column widths per repository.
     pub columns: HashMap<String, ColumnWidths>,
+    /// Where the commit list shows the author.
+    pub author_place: AuthorPlace,
+    /// Where the Open and Clone dialogs start; `None`: ~/Projects if it exists, else ~.
+    pub home_dir: Option<PathBuf>,
+    /// Reopen the tabs in the order they were dragged into; off: sorted by name.
+    pub remember_tab_order: bool,
+}
+
+/// The author in a column with avatar and name, or as initials on the commit dots.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AuthorPlace {
+    #[default]
+    Column,
+    Graph,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -176,6 +190,9 @@ impl Default for Settings {
             pull_modes: HashMap::new(),
             fetch_default: Default::default(),
             columns: HashMap::new(),
+            author_place: AuthorPlace::Column,
+            home_dir: None,
+            remember_tab_order: true,
         }
     }
 }

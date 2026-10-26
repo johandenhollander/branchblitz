@@ -280,6 +280,8 @@ pub struct Commit {
     pub author: String,
     pub time: i64,
     pub subject: String,
+    /// The message body on one line ("a | b"), shortened: a preview next to the subject.
+    pub body: String,
 }
 
 #[derive(Clone, Debug)]
@@ -909,7 +911,7 @@ fn load_commits(repo: &Path, limit: usize, has_head: bool) -> Result<Vec<Commit>
         "--tags",
         "--date-order",
         "-z",
-        "--format=%H%x1f%P%x1f%an%x1f%ct%x1f%s",
+        "--format=%H%x1f%P%x1f%an%x1f%ct%x1f%s%x1f%b",
         n.as_str(),
     ];
     if has_head {
@@ -920,8 +922,8 @@ fn load_commits(repo: &Path, limit: usize, has_head: bool) -> Result<Vec<Commit>
         .split('\0')
         .filter_map(|rec| {
             let rec = rec.trim_start_matches('\n');
-            let f: Vec<&str> = rec.splitn(5, '\x1f').collect();
-            if f.len() < 5 {
+            let f: Vec<&str> = rec.splitn(6, '\x1f').collect();
+            if f.len() < 6 {
                 return None;
             }
             Some(Commit {
@@ -930,9 +932,39 @@ fn load_commits(repo: &Path, limit: usize, has_head: bool) -> Result<Vec<Commit>
                 author: f[2].to_string(),
                 time: f[3].parse().unwrap_or(0),
                 subject: f[4].to_string(),
+                body: body_preview(f[5]),
             })
         })
         .collect())
+}
+
+/// The body's non-empty lines joined with " | ", at most 200 characters; trailers such as
+/// Signed-off-by left out.
+fn body_preview(body: &str) -> String {
+    let trailer = |l: &str| {
+        let l = l.to_ascii_lowercase();
+        ["signed-off-by:", "co-authored-by:", "change-id:"]
+            .iter()
+            .any(|t| l.starts_with(t))
+    };
+    let mut out = String::new();
+    for line in body
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !trailer(l))
+    {
+        if !out.is_empty() {
+            out.push_str(" | ");
+        }
+        out.push_str(line);
+        if out.len() > 200 {
+            break;
+        }
+    }
+    match out.char_indices().nth(200) {
+        Some((i, _)) => out[..i].to_string(),
+        None => out,
+    }
 }
 
 fn load_status(repo: &Path) -> Result<WorkStatus, String> {
@@ -1688,6 +1720,15 @@ pub fn refs_by_commit(refs: &[RefInfo]) -> HashMap<String, Vec<usize>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn body_preview_joins_lines_and_shortens() {
+        assert_eq!(body_preview("\n a\n\nb \n"), "a | b");
+        assert_eq!(body_preview(""), "");
+        assert_eq!(body_preview("Fix\n\nCo-Authored-By: X <x@y>"), "Fix");
+        let long = "é".repeat(300);
+        assert_eq!(body_preview(&long).chars().count(), 200);
+    }
 
     /// A throwaway repository with one commit on `main`.
     fn repo(name: &str) -> PathBuf {

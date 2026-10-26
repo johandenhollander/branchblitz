@@ -5,6 +5,8 @@ use super::*;
 // ---------------------------------------------------------------- graph
 
 struct Cols {
+    /// Distance between lanes: wider when the dots carry the author's initials.
+    lane_w: f32,
     refs: (f32, f32),
     graph: (f32, f32),
     msg: (f32, f32),
@@ -20,11 +22,26 @@ struct ColWidths {
     graph: Option<f32>,
     author: f32,
     date: f32,
+    /// The author column is shown (when the window is wide enough).
+    show_author: bool,
+    lane_w: f32,
 }
 
+/// What the commit list shows of the author (from Settings).
+#[derive(Clone, Copy)]
+pub struct GraphOpts {
+    pub author_column: bool,
+    /// The commit dots carry the author's initials.
+    pub author_on_node: bool,
+}
+
+/// Lane distance and dot radius of a commit with the author's initials on it.
+const AVATAR_LANE_W: f32 = 22.0;
+const AVATAR_R: f32 = ds::AVATAR_R;
+
 /// Width the lanes of `lanes` need.
-fn graph_fit(lanes: usize) -> f32 {
-    (lanes.max(1) as f32 * LANE_W + GRAPH_PAD * 2.0).clamp(60.0, 360.0)
+fn graph_fit(lanes: usize, lane_w: f32) -> f32 {
+    (lanes.max(1) as f32 * lane_w + GRAPH_PAD * 2.0).clamp(60.0, 360.0)
 }
 
 /// `bb-commits` grid: refs · graph · message · author · date, 12 px padding and gaps.
@@ -32,7 +49,7 @@ fn columns(left: f32, width: f32, w: ColWidths, lanes: usize) -> Cols {
     let (pad, gap) = (12.0, 12.0);
     let graph_w = w
         .graph
-        .unwrap_or_else(|| graph_fit(lanes))
+        .unwrap_or_else(|| graph_fit(lanes, w.lane_w))
         .clamp(40.0, 600.0);
     let r0 = left + pad;
     let g0 = r0 + w.refs + gap;
@@ -40,13 +57,14 @@ fn columns(left: f32, width: f32, w: ColWidths, lanes: usize) -> Cols {
     let d1 = left + width - pad;
     let d0 = (d1 - w.date).max(m0 + 100.0);
     // The message keeps at least 100 px; the author column gives way first.
-    let author_w = if width > 820.0 {
+    let author_w = if w.show_author && width > 820.0 {
         w.author.min(d0 - gap - (m0 + 100.0 + gap)).max(0.0)
     } else {
         0.0
     };
     let a0 = d0 - gap - author_w;
     Cols {
+        lane_w: w.lane_w,
         refs: (r0, r0 + w.refs),
         graph: (g0, g0 + graph_w),
         msg: (m0, if author_w > 0.0 { a0 - gap } else { d0 - gap }),
@@ -420,7 +438,7 @@ fn fit_refs(
 
 /// Centre of a lane in the graph column.
 fn lane_x(cols: &Cols, lane: usize) -> f32 {
-    cols.graph.0 + GRAPH_PAD + LANE_W * lane as f32 + LANE_W / 2.0
+    cols.graph.0 + GRAPH_PAD + cols.lane_w * lane as f32 + cols.lane_w / 2.0
 }
 
 fn draw_seg(painter: &Painter, from: Pos2, to: Pos2, color: Color32, top_half: bool) {
@@ -455,7 +473,13 @@ fn dashed_v(painter: &Painter, x: f32, y0: f32, y1: f32, color: Color32) {
     }
 }
 
-pub fn graph_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<Action>) {
+pub fn graph_view(
+    ui: &mut Ui,
+    tab: &mut RepoTab,
+    pal: &Palette,
+    opts: GraphOpts,
+    acts: &mut Vec<Action>,
+) {
     let landing = dnd::take_landing(ui.ctx());
     let has_wip = tab.has_wip_row();
     let RepoTab {
@@ -545,6 +569,12 @@ pub fn graph_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<
         graph: *graph_col_w,
         author: *author_col_w,
         date: *date_col_w,
+        show_author: opts.author_column,
+        lane_w: if opts.author_on_node {
+            AVATAR_LANE_W
+        } else {
+            LANE_W
+        },
     };
     let cols = columns(full.left(), full.width(), widths, graph.lanes);
     let (header, _) = ui.allocate_exact_size(vec2(full.width(), 30.0), Sense::hover());
@@ -774,7 +804,7 @@ pub fn graph_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<
                     3.0,
                     2.0,
                 ));
-                if graph_fit(graph.lanes) > cols.graph.1 - cols.graph.0 + 0.5 {
+                if graph_fit(graph.lanes, cols.lane_w) > cols.graph.1 - cols.graph.0 + 0.5 {
                     fade_right(
                         &painter,
                         cols.graph.1,
@@ -850,7 +880,12 @@ pub fn graph_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<
                     hx,
                     rect.top(),
                     if idx == hr {
-                        yc - NODE_R - 4.0
+                        let r = if opts.author_on_node && c.parents.len() < 2 {
+                            AVATAR_R
+                        } else {
+                            NODE_R
+                        };
+                        yc - r - 4.0
                     } else {
                         rect.bottom()
                     },
@@ -861,6 +896,9 @@ pub fn graph_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<
             // Ref chips, left-aligned in their column: up to two, else one and "+N". A new
             // branch's name field takes their place.
             let node = pos2(lane_x(&cols, g.col), yc);
+            let merge = c.parents.len() > 1;
+            let avatar = opts.author_on_node && !merge;
+            let node_r = if avatar { AVATAR_R } else { NODE_R };
             let naming = new_branch.as_ref().is_some_and(|b| b.at == c.sha);
             if naming {
                 let field =
@@ -871,7 +909,7 @@ pub fn graph_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<
                 painter.line_segment(
                     [
                         pos2(cols.refs.1 + 2.0, yc),
-                        pos2((node.x - NODE_R - 3.0).min(cols.graph.1), yc),
+                        pos2((node.x - node_r - 3.0).min(cols.graph.1), yc),
                     ],
                     Stroke::new(1.0, color.gamma_multiply(0.6)),
                 );
@@ -985,23 +1023,25 @@ pub fn graph_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<
                 painter.line_segment(
                     [
                         pos2(x - 2.0, yc),
-                        pos2((node.x - NODE_R - 3.0).min(cols.graph.1), yc),
+                        pos2((node.x - node_r - 3.0).min(cols.graph.1), yc),
                     ],
                     Stroke::new(1.0, color.gamma_multiply(0.6)),
                 );
             }
 
-            // Node: filled dot, hollow for merges, an extra ring for HEAD. Clipped to the graph
-            // column, which the user can make narrower than the lanes.
+            // Node: filled dot (or the author's initials), hollow for merges, an extra ring for
+            // HEAD. Clipped to the graph column, which the user can make narrower than the lanes.
             let is_head = data.head_sha.as_deref() == Some(c.sha.as_str());
-            if c.parents.len() > 1 {
+            if merge {
                 gpainter.circle_filled(node, NODE_R - 0.5, pal.canvas);
                 gpainter.circle_stroke(node, NODE_R - 0.5, Stroke::new(2.0, color));
+            } else if avatar {
+                ds::avatar(&gpainter, node, &initials(&c.author), color);
             } else {
                 gpainter.circle_filled(node, NODE_R, color);
             }
             if is_head {
-                gpainter.circle_stroke(node, 9.0, Stroke::new(1.5, pal.text));
+                gpainter.circle_stroke(node, node_r + 3.5, Stroke::new(1.5, pal.text));
             }
             // Dragging over a branch: where the new commit would land, on top of this one.
             if landing.as_deref() == Some(c.sha.as_str()) {
@@ -1009,12 +1049,12 @@ pub fn graph_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<
                 let spot = pos2(node.x, rect.top());
                 let accent = Stroke::new(2.0, pal.accent);
                 lp.line_segment([spot, pos2(cols.msg.1, spot.y)], accent);
-                lp.line_segment([spot, node - vec2(0.0, NODE_R)], accent);
+                lp.line_segment([spot, node - vec2(0.0, node_r)], accent);
                 lp.circle_filled(spot, NODE_R, pal.canvas);
                 lp.circle_stroke(spot, NODE_R, accent);
             }
             // More lanes than fit: fade them out at the column's right edge.
-            if graph_fit(graph.lanes) > cols.graph.1 - cols.graph.0 + 0.5 {
+            if graph_fit(graph.lanes, cols.lane_w) > cols.graph.1 - cols.graph.0 + 0.5 {
                 fade_right(
                     &painter,
                     cols.graph.1,
@@ -1023,8 +1063,7 @@ pub fn graph_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<
                 );
             }
 
-            // Message: ticket key in 550; merges in `text-muted`.
-            let merge = c.parents.len() > 1;
+            // Message: ticket key in 550; merges in `text-muted`; the body after it, subtle.
             let subject_color = if merge { pal.text_muted } else { pal.text };
             let key = if merge { 0 } else { ticket_key_len(&c.subject) };
             let mut job = LayoutJob::default();
@@ -1033,6 +1072,10 @@ pub fn graph_view(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<
                     let s = ds::text_job(part, ui_size, weight, subject_color, false);
                     job.append(part, 0.0, s.sections[0].format.clone());
                 }
+            }
+            if !c.body.is_empty() {
+                let s = ds::text_job(&c.body, ui_size, 400.0, pal.text_subtle, false);
+                job.append(&c.body, 10.0, s.sections[0].format.clone());
             }
             job.wrap.max_width = (cols.msg.1 - cols.msg.0).max(1.0);
             job.wrap.max_rows = 1;
@@ -1211,6 +1254,8 @@ mod tests {
             graph: None,
             author: 220.0,
             date: 120.0,
+            show_author: true,
+            lane_w: LANE_W,
         };
         let c = columns(0.0, 1400.0, w, 3);
         assert_eq!(c.author.1 - c.author.0, 220.0);
@@ -1232,10 +1277,24 @@ mod tests {
         assert_eq!(c.graph.1 - c.graph.0, 50.0);
         assert_eq!(
             columns(0.0, 1400.0, w, 2).graph.1 - columns(0.0, 1400.0, w, 2).graph.0,
-            graph_fit(2)
+            graph_fit(2, LANE_W)
         );
         // Narrow windows hide the author column.
         let narrow = columns(0.0, 800.0, w, 3);
         assert_eq!(narrow.author.1 - narrow.author.0, 0.0);
+        // Turned off in Settings: no author column, the message gets the room.
+        let off = columns(
+            0.0,
+            1400.0,
+            ColWidths {
+                show_author: false,
+                ..w
+            },
+            3,
+        );
+        assert_eq!(off.author.1 - off.author.0, 0.0);
+        assert_eq!(off.msg.1, off.date.0 - 12.0);
+        // Initials on the dots: wider lanes.
+        assert!(graph_fit(3, AVATAR_LANE_W) > graph_fit(3, LANE_W));
     }
 }

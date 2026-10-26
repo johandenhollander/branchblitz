@@ -5,7 +5,7 @@ use eframe::egui::{
     self, Color32, CornerRadius, Rect, RichText, Sense, Stroke, StrokeKind, Ui, vec2,
 };
 
-use crate::app::Settings;
+use crate::app::{AuthorPlace, Settings};
 use crate::colors::{self, ColorRule};
 use crate::theme::{self, DiffColors, Look, Palette, RADIUS_LG, Scheme, ThemeChoice};
 use crate::{ds, icons};
@@ -50,6 +50,9 @@ pub struct Outcome {
     pub fonts_changed: bool,
     pub open_log: bool,
     pub check_updates: bool,
+    /// Choose the home folder, or go back to the default.
+    pub pick_home: bool,
+    pub clear_home: bool,
 }
 
 /// The size of the Settings window, also used for the agent shown large.
@@ -123,7 +126,9 @@ pub fn window(
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| match page {
-                            Page::General => general(ui, settings, &pal, info),
+                            Page::General => {
+                                (out.pick_home, out.clear_home) = general(ui, settings, &pal, info)
+                            }
                             // Branch colors are part of the look, below the theme and fonts.
                             Page::Appearance => {
                                 (out.style_changed, out.fonts_changed) =
@@ -217,10 +222,16 @@ fn section(ui: &mut Ui, title: &str) {
     ui.add_space(8.0);
 }
 
-fn general(ui: &mut Ui, s: &mut Settings, pal: &Palette, info: &Info) {
+/// Width of the label column on the General page, so its grids line up.
+const LABEL_W: f32 = 110.0;
+
+/// Returns whether to choose a home folder and whether to clear it.
+fn general(ui: &mut Ui, s: &mut Settings, pal: &Palette, info: &Info) -> (bool, bool) {
+    let (mut pick, mut clear) = (false, false);
     section(ui, "General");
     egui::Grid::new("general")
         .num_columns(2)
+        .min_col_width(LABEL_W)
         .spacing([24.0, 14.0])
         .show(ui, |ui| {
             ui.label("Commits to load");
@@ -246,10 +257,65 @@ fn general(ui: &mut Ui, s: &mut Settings, pal: &Palette, info: &Info) {
                 ui.label("minutes (0 = off)");
             });
             ui.end_row();
+            ui.label("Home folder");
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    let shown = match &s.home_dir {
+                        Some(p) => RichText::new(p.display().to_string()).color(pal.text),
+                        None => {
+                            RichText::new("~/Projects, else your home folder").color(pal.text_muted)
+                        }
+                    };
+                    ui.label(shown);
+                    pick = ui.button("Choose…").clicked();
+                    if s.home_dir.is_some() {
+                        clear = ui.button("Reset").clicked();
+                    }
+                });
+                ui.label(
+                    RichText::new("Where opening and cloning a repository start.")
+                        .size(12.0)
+                        .color(pal.text_subtle),
+                );
+            });
+            ui.end_row();
+            ui.label("Tabs");
+            ui.checkbox(
+                &mut s.remember_tab_order,
+                "Remember the order (drag tabs to arrange them)",
+            );
+            ui.end_row();
+        });
+    section(ui, "Commit list");
+    egui::Grid::new("commit-list")
+        .num_columns(2)
+        .min_col_width(LABEL_W)
+        .spacing([24.0, 14.0])
+        .show(ui, |ui| {
+            ui.label("Author");
+            ui.vertical(|ui| {
+                ui.radio_value(
+                    &mut s.author_place,
+                    AuthorPlace::Column,
+                    "In its own column",
+                );
+                ui.radio_value(
+                    &mut s.author_place,
+                    AuthorPlace::Graph,
+                    "As initials on the commit dots",
+                );
+                ui.label(
+                    RichText::new("On the dots, the message gets the column's room.")
+                        .size(12.0)
+                        .color(pal.text_subtle),
+                );
+            });
+            ui.end_row();
         });
     section(ui, "Graphics");
     egui::Grid::new("graphics")
         .num_columns(2)
+        .min_col_width(LABEL_W)
         .spacing([24.0, 14.0])
         .show(ui, |ui| {
             ui.label("GPU");
@@ -281,6 +347,7 @@ fn general(ui: &mut Ui, s: &mut Settings, pal: &Palette, info: &Info) {
             ui.label(RichText::new(info.renderer).color(pal.text_muted));
             ui.end_row();
         });
+    (pick, clear)
 }
 
 const REPO: &str = crate::REPO_URL;

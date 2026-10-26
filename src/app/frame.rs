@@ -229,6 +229,11 @@ impl eframe::App for BranchBlitz {
                 });
             });
         self.settings.agent_height = agent_h;
+        let on_node = self.settings.author_place == AuthorPlace::Graph;
+        let opts = views::GraphOpts {
+            author_column: !on_node,
+            author_on_node: on_node,
+        };
         let tab = &mut self.tabs[i];
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(pal.canvas))
@@ -241,7 +246,7 @@ impl eframe::App for BranchBlitz {
                 } else if tab.file_view.is_some() {
                     crate::file_view::show(ui, tab, &pal, &mut acts);
                 } else {
-                    views::graph_view(ui, tab, &pal, &mut acts);
+                    views::graph_view(ui, tab, &pal, opts, &mut acts);
                 }
             });
 

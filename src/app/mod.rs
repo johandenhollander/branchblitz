@@ -39,7 +39,7 @@ mod worker;
 pub(crate) use chrome::split_message;
 use modals::modal_title;
 use notices::system_info;
-pub use settings::{ColumnWidths, Settings};
+pub use settings::{AuthorPlace, ColumnWidths, Settings};
 use worker::spawn_worker;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -84,6 +84,8 @@ enum MsgKind {
     Cloned(Result<PathBuf, String>),
     /// The folder chosen to clone into.
     PickedCloneParent(PathBuf),
+    /// The home folder chosen in Settings.
+    PickedHomeDir(PathBuf),
     /// Find matches in the whole history: the query and the commits.
     FoundInHistory(String, Result<Vec<String>, String>),
     /// File history or blame (its generation).
@@ -415,6 +417,9 @@ impl BranchBlitz {
                 app.open_repo(path, false);
             }
         }
+        if !settings.remember_tab_order {
+            app.tabs.sort_by_key(|t| t.name.to_lowercase());
+        }
         app.active = settings
             .active_repo
             .as_ref()
@@ -643,6 +648,18 @@ impl BranchBlitz {
         }
     }
 
+    /// Moves tab `from` to before the tab now at `to` (`to` = the number of tabs: last).
+    pub(crate) fn move_tab(&mut self, from: usize, to: usize) {
+        if from >= self.tabs.len() {
+            return;
+        }
+        let active = self.active.map(|a| self.tabs[a].id);
+        let tab = self.tabs.remove(from);
+        let to = if to > from { to - 1 } else { to }.min(self.tabs.len());
+        self.tabs.insert(to, tab);
+        self.active = active.and_then(|id| self.tabs.iter().position(|t| t.id == id));
+    }
+
     fn close_tab(&mut self, i: usize) {
         self.tabs.remove(i);
         self.active = match self.active {
@@ -746,20 +763,27 @@ impl BranchBlitz {
         }
     }
 
-    /// Opens the clone dialog, starting in the folder of the last clone (else ~/Projects or ~;
-    /// without a window, the temp dir: tests and the MCP server stay out of the user's folders).
+    /// Where Open and Clone start: the home folder from Settings, else ~/Projects or ~; without
+    /// a window, the temp dir (tests and the MCP server stay out of the user's folders).
+    pub(crate) fn home_dir(&self) -> PathBuf {
+        if self.headless {
+            return std::env::temp_dir();
+        }
+        if let Some(h) = self.settings.home_dir.as_ref().filter(|p| p.is_dir()) {
+            return h.clone();
+        }
+        let home = std::env::home_dir().unwrap_or_default();
+        Some(home.join("Projects"))
+            .filter(|p| p.is_dir())
+            .unwrap_or(home)
+    }
+
+    /// Opens the clone dialog, starting in the folder of the last clone, else the home folder.
     fn open_clone(&mut self) {
-        let home = if self.headless {
-            std::env::temp_dir()
-        } else {
-            std::env::home_dir().unwrap_or_default()
+        let parent = match &self.settings.clone_parent {
+            Some(p) => p.clone(),
+            None => self.home_dir(),
         };
-        let parent = self
-            .settings
-            .clone_parent
-            .clone()
-            .or_else(|| Some(home.join("Projects")).filter(|p| p.is_dir()))
-            .unwrap_or(home);
         self.modal = Some(Modal::Clone {
             url: String::new(),
             parent: parent.display().to_string(),
@@ -824,6 +848,34 @@ impl BranchBlitz {
         });
     }
 
+    /// The folder picker for the home folder in Settings.
+    fn pick_home_dir(&mut self) {
+        if self.headless {
+            self.status_line = Some((false, "No folder dialog in automation mode".into()));
+            return;
+        }
+        let (tx, ctx, start) = (self.tx.clone(), self.ctx.clone(), self.home_dir());
+        std::thread::spawn(move || {
+            if let Some(p) = rfd::FileDialog::new()
+                .set_title("Home folder")
+                .set_directory(start)
+                .pick_folder()
+            {
+                let _ = tx.send(Msg {
+                    tab: 0,
+                    kind: MsgKind::PickedHomeDir(p),
+                });
+                ctx.request_repaint();
+            }
+        });
+    }
+
+    /// A new home folder: clones start there too, instead of where the last one went.
+    pub(crate) fn set_home_dir(&mut self, p: Option<PathBuf>) {
+        self.settings.home_dir = p;
+        self.settings.clone_parent = None;
+    }
+
     fn pick_folder(&mut self) {
         if self.headless {
             self.status_line = Some((
@@ -832,10 +884,11 @@ impl BranchBlitz {
             ));
             return;
         }
-        let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
+        let (tx, ctx, start) = (self.tx.clone(), self.ctx.clone(), self.home_dir());
         std::thread::spawn(move || {
             if let Some(p) = rfd::FileDialog::new()
                 .set_title("Open repository")
+                .set_directory(start)
                 .pick_folder()
             {
                 let _ = tx.send(Msg {

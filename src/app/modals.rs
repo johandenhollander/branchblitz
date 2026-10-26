@@ -36,6 +36,12 @@ impl BranchBlitz {
         if out.colors_changed {
             self.recolor();
         }
+        if out.pick_home {
+            self.pick_home_dir();
+        }
+        if out.clear_home {
+            self.set_home_dir(None);
+        }
         if out.check_updates {
             self.check_for_updates(true);
         }

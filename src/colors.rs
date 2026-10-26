@@ -274,6 +274,7 @@ mod tests {
             author: String::new(),
             time: 0,
             subject: subject.into(),
+            body: String::new(),
         }
     }
 

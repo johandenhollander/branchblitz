@@ -465,8 +465,11 @@ pub fn status_letter(painter: &Painter, center: Pos2, status: char, pal: &Palett
 }
 
 /// `bb-avatar`: lane-coloured initials.
+/// Radius of an author avatar.
+pub const AVATAR_R: f32 = 9.0;
+
 pub fn avatar(painter: &Painter, center: Pos2, initials: &str, lane: Color32) {
-    painter.circle_filled(center, 9.0, lane);
+    painter.circle_filled(center, AVATAR_R, lane);
     let fg = crate::theme::readable_on(lane);
     let g = painter.layout_job(text_job(initials, 8.5, 700.0, fg, false));
     painter.galley(center - g.size() / 2.0, g, fg);

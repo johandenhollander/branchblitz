@@ -192,6 +192,7 @@ mod tests {
             author: String::new(),
             time: 0,
             subject: String::new(),
+            body: String::new(),
         }
     }
 

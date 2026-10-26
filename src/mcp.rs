@@ -2904,6 +2904,73 @@ mod tests {
             .clear();
     }
 
+    /// With the author on the commit dots, the author column goes and the message shows its
+    /// body after the subject.
+    #[test]
+    fn author_on_the_commit_dots() {
+        let mut s = Server::default();
+        let (err, out) = call(&mut s, "demo_repo", json!({}));
+        assert!(!err, "{out}");
+        call(&mut s, "resize", json!({"width": 1500, "height": 800}));
+        let (_, before) = call(&mut s, "widgets", json!({"label": "Resize author column"}));
+        assert!(!before.contains("no matching"), "{before}");
+        call(&mut s, "click", json!({"label": "Settings"}));
+        call(&mut s, "click", json!({"label": "General"}));
+        let (err, out) = call(
+            &mut s,
+            "click",
+            json!({"label": "As initials on the commit dots"}),
+        );
+        assert!(!err, "{out}");
+        let shot = s.call("screenshot", &json!({}));
+        if std::env::var_os("BB_SAVE_SHOTS").is_some()
+            && let Some(d) = shot["content"][0]["data"].as_str()
+        {
+            let png = base64::engine::general_purpose::STANDARD.decode(d).unwrap();
+            std::fs::write(std::env::temp_dir().join("bb-settings-general.png"), png).unwrap();
+        }
+        call(&mut s, "key", json!({"key": "Escape"}));
+        let (_, after) = call(&mut s, "widgets", json!({"label": "Resize author column"}));
+        assert_ne!(before, after, "the author column is still there");
+        let shot = s.call("screenshot", &json!({}));
+        if std::env::var_os("BB_SAVE_SHOTS").is_some()
+            && let Some(d) = shot["content"][0]["data"].as_str()
+        {
+            let png = base64::engine::general_purpose::STANDARD.decode(d).unwrap();
+            std::fs::write(std::env::temp_dir().join("bb-author-graph.png"), png).unwrap();
+        }
+    }
+
+    /// Tabs are rearranged by dragging one onto another; the active tab stays active.
+    #[test]
+    fn tabs_reorder_by_dragging() {
+        let mut s = Server::default();
+        let (err, out) = call(&mut s, "demo_repo", json!({}));
+        assert!(!err, "{out}");
+        let repo = s.demo_dirs[0].join("other");
+        let (err, out) = call(
+            &mut s,
+            "open_repo",
+            json!({"path": repo.display().to_string()}),
+        );
+        assert!(!err, "{out}");
+        let names = |s: &mut Server| -> Vec<String> {
+            let h = s.session.as_mut().unwrap();
+            h.state_mut()
+                .tabs_mut()
+                .iter()
+                .map(|t| t.name.clone())
+                .collect()
+        };
+        assert_eq!(names(&mut s), ["work", "other"]);
+        let (err, out) = call(&mut s, "drag", json!({"label": "work", "to": "other"}));
+        assert!(!err, "{out}");
+        assert_eq!(names(&mut s), ["other", "work"]);
+        // `other` was opened last, so it stays the active tab, now first.
+        let h = s.session.as_mut().unwrap();
+        assert_eq!(h.state_mut().active_tab_name().as_deref(), Some("other"));
+    }
+
     /// A confirmation is a bar under the toolbar, not a dialog. Escape cancels it, Enter does not
     /// confirm a destructive one, and its button runs the action.
     #[test]

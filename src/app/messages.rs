@@ -14,6 +14,10 @@ impl BranchBlitz {
                 self.cloned(r.clone());
                 continue;
             }
+            if let MsgKind::PickedHomeDir(p) = msg.kind {
+                self.set_home_dir(Some(p));
+                continue;
+            }
             if let MsgKind::PickedCloneParent(p) = &msg.kind {
                 if let Some(Modal::Clone { parent, .. }) = &mut self.modal {
                     *parent = p.display().to_string();
@@ -277,7 +281,8 @@ impl BranchBlitz {
                 MsgKind::PickedFolder(_)
                 | MsgKind::Latest(_)
                 | MsgKind::Cloned(_)
-                | MsgKind::PickedCloneParent(_) => unreachable!(),
+                | MsgKind::PickedCloneParent(_)
+                | MsgKind::PickedHomeDir(_) => unreachable!(),
             }
         }
     }

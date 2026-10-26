@@ -6,6 +6,10 @@ impl BranchBlitz {
     pub(super) fn tab_bar(&mut self, ui: &mut egui::Ui, pal: &Palette) {
         let mut switch = None;
         let mut close = None;
+        // A tab being dragged to another place, and one dropped.
+        let (mut dragging, mut dropped) = (None, None);
+        let mut moved = None;
+        let mut rects = Vec::new();
         let animate = self.settings.animation_ms > 0;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
@@ -37,7 +41,13 @@ impl BranchBlitz {
                 let dot_w = if flagged { 6.0 + 8.0 } else { 0.0 };
                 let w = 12.0 + dot_w + g.size().x + 8.0 + 18.0 + 8.0;
                 let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 30.0), egui::Sense::hover());
-                let resp = ui.interact(rect, id, egui::Sense::click());
+                let resp = ui.interact(rect, id, egui::Sense::click_and_drag());
+                rects.push(rect);
+                if resp.dragged_by(egui::PointerButton::Primary) {
+                    dragging = Some(i);
+                } else if resp.drag_stopped_by(egui::PointerButton::Primary) {
+                    dropped = Some(i);
+                }
                 resp.widget_info(|| {
                     egui::WidgetInfo::selected(egui::Role::Button, true, active, &tab.name)
                 });
@@ -122,6 +132,29 @@ impl BranchBlitz {
                 }
                 resp.on_hover_text(tab.path.display().to_string());
             }
+            // While dragging: an accent line where the tab would go.
+            if let Some(from) = dragging.or(dropped)
+                && let Some(x) = ui.ctx().pointer_latest_pos().map(|p| p.x)
+            {
+                let to = rects.iter().filter(|r| r.center().x <= x).count();
+                if dragging.is_some() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    if to != from && to != from + 1 {
+                        let lx = rects
+                            .get(to)
+                            .map(|r| r.left() - 1.0)
+                            .unwrap_or_else(|| rects[rects.len() - 1].right() + 1.0);
+                        let r = rects[from];
+                        ui.painter().vline(
+                            lx,
+                            r.y_range().shrink(4.0),
+                            egui::Stroke::new(2.0, pal.accent),
+                        );
+                    }
+                } else {
+                    moved = Some((from, to));
+                }
+            }
             let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::click());
             let rect = egui::Rect::from_center_size(
                 rect.center() - egui::vec2(0.0, 1.0),
@@ -152,6 +185,9 @@ impl BranchBlitz {
                 self.active = None;
             }
         });
+        if let Some((from, to)) = moved {
+            self.move_tab(from, to);
+        }
         if let Some(i) = close {
             self.close_tab(i);
         } else if let Some(i) = switch {

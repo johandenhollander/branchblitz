@@ -44,7 +44,7 @@ pub use banner::{alert_bar, state_banner};
 pub use details::details;
 pub use diff::diff_view;
 pub use dnd::drag_ghost;
-pub use graph::graph_view;
+pub use graph::{GraphOpts, graph_view};
 pub use menus::ref_menu;
 pub(crate) use sidebar::checkout_action;
 pub use sidebar::sidebar;

@@ -14,6 +14,11 @@ impl BranchBlitz {
     }
 
     #[cfg(test)]
+    pub(crate) fn active_tab_name(&self) -> Option<String> {
+        self.active.map(|i| self.tabs[i].name.clone())
+    }
+
+    #[cfg(test)]
     pub(crate) fn clear_status(&mut self) {
         self.status_line = None;
     }
