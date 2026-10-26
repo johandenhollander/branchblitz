@@ -105,6 +105,19 @@ impl BranchBlitz {
                 }
                 Action::FlowInit => {
                     let tab = &self.tabs[i];
+                    let flow = tab
+                        .data
+                        .as_ref()
+                        .map(|d| d.flow.clone())
+                        .unwrap_or_default();
+                    if flow.configured() {
+                        self.modal = Some(Modal::FlowInit {
+                            tab: tab.id,
+                            config: flow.config(),
+                            update: true,
+                        });
+                        continue;
+                    }
                     let has =
                         |name: &str| tab.data.as_ref().is_some_and(|d| d.local(name).is_some());
                     // git-flow's own guess: main or master, else the current branch.
@@ -116,8 +129,11 @@ impl BranchBlitz {
                         .unwrap_or_default();
                     self.modal = Some(Modal::FlowInit {
                         tab: tab.id,
-                        master,
-                        develop: "develop".into(),
+                        config: git::FlowConfig {
+                            master,
+                            ..flow.config()
+                        },
+                        update: false,
                     });
                 }
                 Action::Copy(s) => self.ctx.copy_text(s),

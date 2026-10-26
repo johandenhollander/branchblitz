@@ -203,11 +203,11 @@ enum Modal {
         error: Option<String>,
         focus: bool,
     },
-    /// Set up git flow: the production and the development branch.
+    /// Set up git flow, or change its settings (`update`): branches, prefixes, version tag.
     FlowInit {
         tab: u64,
-        master: String,
-        develop: String,
+        config: git::FlowConfig,
+        update: bool,
     },
 }
 

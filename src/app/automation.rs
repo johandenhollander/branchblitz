@@ -223,11 +223,11 @@ impl BranchBlitz {
                         v["busy"] = json!(busy);
                         v["error"] = json!(error);
                     }
-                    Modal::FlowInit {
-                        master, develop, ..
-                    } => {
-                        v["master"] = json!(master);
-                        v["develop"] = json!(develop);
+                    Modal::FlowInit { config: c, .. } => {
+                        v["master"] = json!(c.master);
+                        v["develop"] = json!(c.develop);
+                        v["prefixes"] = json!([c.feature, c.bugfix, c.release, c.hotfix]);
+                        v["versiontag"] = json!(c.versiontag);
                     }
                     Modal::Settings => {}
                 }

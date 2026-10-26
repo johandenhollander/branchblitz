@@ -382,6 +382,54 @@ pub struct GitFlow {
     pub versiontag: String,
 }
 
+/// The editable git-flow settings: the two long-lived branches, the prefixes and the version
+/// tag prefix (may be empty).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FlowConfig {
+    pub master: String,
+    pub develop: String,
+    pub feature: String,
+    pub bugfix: String,
+    pub release: String,
+    pub hotfix: String,
+    pub versiontag: String,
+}
+
+impl FlowConfig {
+    /// The four branch prefixes, with their kind.
+    pub fn prefixes(&self) -> [(FlowKind, &String); 4] {
+        [
+            (FlowKind::Feature, &self.feature),
+            (FlowKind::Bugfix, &self.bugfix),
+            (FlowKind::Release, &self.release),
+            (FlowKind::Hotfix, &self.hotfix),
+        ]
+    }
+
+    /// Why these prefixes can't work together: empty, or one starts with another (a branch
+    /// would belong to two kinds).
+    pub fn prefix_problem(&self) -> Option<String> {
+        let p = self.prefixes();
+        for (kind, prefix) in p {
+            if prefix.is_empty() {
+                return Some(format!("Enter a prefix for {}", kind.name()));
+            }
+        }
+        for (a, pa) in p {
+            for (b, pb) in p {
+                if a != b && pb.starts_with(pa.as_str()) {
+                    return Some(format!(
+                        "The {} and {} prefixes overlap",
+                        a.name(),
+                        b.name()
+                    ));
+                }
+            }
+        }
+        None
+    }
+}
+
 /// The kinds of git-flow branch BranchBlitz starts and finishes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FlowKind {
@@ -455,6 +503,19 @@ impl GitFlow {
             }
         }
         branch.to_string()
+    }
+
+    /// The settings as they are, git-flow's defaults where nothing is configured.
+    pub fn config(&self) -> FlowConfig {
+        FlowConfig {
+            master: self.master.clone().unwrap_or_default(),
+            develop: self.develop.clone().unwrap_or_else(|| "develop".into()),
+            feature: self.prefix(FlowKind::Feature),
+            bugfix: self.prefix(FlowKind::Bugfix),
+            release: self.prefix(FlowKind::Release),
+            hotfix: self.prefix(FlowKind::Hotfix),
+            versiontag: self.versiontag.clone(),
+        }
     }
 
     /// `git flow init` has run: both long-lived branches are configured.
@@ -1419,11 +1480,11 @@ pub enum Op {
         pull: Option<(String, String)>,
         then: Box<Op>,
     },
-    /// `git flow init` without git-flow: the branch roles and default prefixes in the repository
-    /// config; `develop` is created from `master` when missing.
+    /// `git flow init` without git-flow, also to change its settings later: the branch roles,
+    /// prefixes and version tag prefix in the repository config; `develop` is created from
+    /// `master` when missing.
     FlowInit {
-        master: String,
-        develop: String,
+        config: FlowConfig,
     },
     /// Creates `<prefix><name>` from develop (master for a hotfix) and checks it out.
     FlowStart {
@@ -1533,7 +1594,21 @@ impl Op {
                 v.extend(then.names());
                 v
             }
-            Op::FlowInit { master, develop } => vec![master, develop],
+            Op::FlowInit { config: c } => {
+                let mut v = vec![
+                    c.master.as_str(),
+                    &c.develop,
+                    &c.feature,
+                    &c.bugfix,
+                    &c.release,
+                    &c.hotfix,
+                ];
+                // No version tag prefix is fine.
+                if !c.versiontag.is_empty() {
+                    v.push(&c.versiontag);
+                }
+                v
+            }
             Op::FlowStart { name, .. } => vec![name],
             Op::FlowFinish { branch } => vec![branch],
             _ => vec![],
@@ -1798,9 +1873,13 @@ impl Op {
                 }
                 Ok(out + &then.run(repo, data)?)
             }
-            Op::FlowInit { master, develop } => {
+            Op::FlowInit { config } => {
+                let (master, develop) = (&config.master, &config.develop);
                 if master == develop {
                     return Err("master and develop must be different branches".into());
+                }
+                if let Some(p) = config.prefix_problem() {
+                    return Err(p);
                 }
                 g(&[
                     "rev-parse",
@@ -1820,20 +1899,20 @@ impl Op {
                 {
                     out += &g(&["branch", develop, master])?;
                 }
-                let mut config = vec![
+                let mut values = vec![
                     ("gitflow.branch.master", master.as_str()),
                     ("gitflow.branch.develop", develop.as_str()),
-                    ("gitflow.prefix.feature", "feature/"),
-                    ("gitflow.prefix.bugfix", "bugfix/"),
-                    ("gitflow.prefix.release", "release/"),
-                    ("gitflow.prefix.hotfix", "hotfix/"),
-                    ("gitflow.prefix.support", "support/"),
+                    ("gitflow.prefix.feature", config.feature.as_str()),
+                    ("gitflow.prefix.bugfix", config.bugfix.as_str()),
+                    ("gitflow.prefix.release", config.release.as_str()),
+                    ("gitflow.prefix.hotfix", config.hotfix.as_str()),
+                    ("gitflow.prefix.versiontag", config.versiontag.as_str()),
                 ];
-                // Keep a version tag prefix configured earlier (`v`).
-                if g(&["config", "--get", "gitflow.prefix.versiontag"]).is_err() {
-                    config.push(("gitflow.prefix.versiontag", ""));
+                // Support branches aren't edited here; git-flow wants the key.
+                if g(&["config", "--get", "gitflow.prefix.support"]).is_err() {
+                    values.push(("gitflow.prefix.support", "support/"));
                 }
-                for (key, value) in config {
+                for (key, value) in values {
                     g(&["config", key, value])?;
                 }
                 Ok(out)
@@ -2425,10 +2504,14 @@ mod tests {
         git(dir, &["commit", "-qm", msg]).unwrap();
     }
 
+    /// As the dialog does: starting from what is configured.
     fn flow_init(dir: &Path) {
         Op::FlowInit {
-            master: "main".into(),
-            develop: "develop".into(),
+            config: FlowConfig {
+                master: "main".into(),
+                develop: "develop".into(),
+                ..load_flow(dir).config()
+            },
         }
         .run(dir, None)
         .unwrap();
@@ -2439,8 +2522,11 @@ mod tests {
         let dir = repo("flowinit");
         let init = |master: &str, develop: &str| {
             Op::FlowInit {
-                master: master.into(),
-                develop: develop.into(),
+                config: FlowConfig {
+                    master: master.into(),
+                    develop: develop.into(),
+                    ..load_flow(&dir).config()
+                },
             }
             .run(&dir, None)
         };
@@ -2462,6 +2548,32 @@ mod tests {
         commit_file(&dir, "b.txt", "b\n", "on main");
         init("main", "develop").unwrap();
         assert_ne!(rev(&dir, "develop"), rev(&dir, "main"));
+        // Changed later: other prefixes and version tag; overlapping ones are refused.
+        let changed = FlowConfig {
+            feature: "feat-".into(),
+            versiontag: "release-".into(),
+            ..load_flow(&dir).config()
+        };
+        Op::FlowInit {
+            config: changed.clone(),
+        }
+        .run(&dir, None)
+        .unwrap();
+        assert_eq!(load_flow(&dir).config(), changed);
+        assert_eq!(
+            load_flow(&dir).kind_of("feat-x"),
+            Some((FlowKind::Feature, "x"))
+        );
+        let overlap = FlowConfig {
+            bugfix: "feat-fix/".into(),
+            ..changed.clone()
+        };
+        assert!(Op::FlowInit { config: overlap }.run(&dir, None).is_err());
+        let empty = FlowConfig {
+            hotfix: String::new(),
+            ..changed
+        };
+        assert!(Op::FlowInit { config: empty }.run(&dir, None).is_err());
     }
 
     #[test]

@@ -3229,6 +3229,28 @@ mod tests {
         assert_eq!(st["tabs"][0]["head_branch"], json!("develop"), "{st}");
         assert!(st["status_line"]["ok"].as_bool().unwrap(), "{st}");
         assert!(!locals(&mut s).contains(&"bugfix/PROJ-610".to_string()));
+
+        // Its settings can be changed later, starting from what is configured.
+        flow_menu(&mut s);
+        click(&mut s, json!({"label": "Git flow settings…"}));
+        let st = state(&mut s);
+        assert_eq!(st["dialog"]["title"], json!("Git flow settings"), "{st}");
+        assert_eq!(
+            st["dialog"]["prefixes"],
+            json!(["feature/", "bugfix/", "release/", "hotfix/"])
+        );
+        call(
+            &mut s,
+            "type_text",
+            json!({"label": "Version tag", "text": "v"}),
+        );
+        save_shot(&mut s, "bb-flow-settings.png");
+        click(&mut s, json!({"label": "Save", "role": "Button"}));
+        call(&mut s, "wait_idle", json!({}));
+        assert!(state(&mut s)["dialog"].is_null());
+        let data = crate::git::load(&s.demo_dirs[0].join("work"), 10).unwrap();
+        assert_eq!(data.flow.versiontag, "v");
+        assert_eq!(data.flow.develop.as_deref(), Some("develop"));
     }
 
     #[test]

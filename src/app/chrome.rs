@@ -865,6 +865,11 @@ fn flow_menu(ui: &mut egui::Ui, pal: &Palette, data: &RepoData, acts: &mut Vec<A
         ds::menu_divider(ui, pal);
         views::flow_finish_item(ui, pal, data, kind, head, acts);
     }
+    ds::menu_divider(ui, pal);
+    if ds::menu_item(ui, pal, icons::SETTINGS, "Git flow settings…", None, false).clicked() {
+        acts.push(Action::FlowInit);
+        ui.close();
+    }
 }
 
 fn pull_mode_label(mode: git::PullMode) -> &'static str {

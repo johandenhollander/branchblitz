@@ -363,59 +363,118 @@ impl BranchBlitz {
                             }
                         });
                     }
-                    Modal::FlowInit {
-                        master, develop, ..
-                    } => {
-                        ui.label(ds::title("Initialize git flow").color(pal.text));
-                        let field = |ui: &mut egui::Ui, text: &mut String, label: &str| {
-                            ui.label(RichText::new(label).size(12.0).color(pal.text_muted));
-                            let r = ui.add_sized(
-                                egui::vec2(ui.available_width(), ds::CONTROL_MD),
-                                egui::TextEdit::singleline(text).align(egui::Align2::LEFT_CENTER),
-                            );
-                            r.widget_info(|| {
-                                egui::WidgetInfo::labeled(egui::Role::TextInput, true, label)
-                            });
+                    Modal::FlowInit { config, update, .. } => {
+                        let title = if *update {
+                            "Git flow settings"
+                        } else {
+                            "Initialize git flow"
                         };
-                        field(ui, master, "Production branch");
-                        field(ui, develop, "Development branch");
-                        let (m, d) = (master.trim(), develop.trim());
+                        ui.label(ds::title(title).color(pal.text));
+                        let section = |ui: &mut egui::Ui, text: &str| {
+                            ui.add_space(4.0);
+                            ui.label(ds::strong(text));
+                        };
+                        let grid = |ui: &mut egui::Ui, id: &str, rows: Vec<(&str, &mut String)>| {
+                            egui::Grid::new(id)
+                                .num_columns(2)
+                                .min_col_width(130.0)
+                                .spacing([12.0, 8.0])
+                                .show(ui, |ui| {
+                                    for (label, text) in rows {
+                                        ui.label(RichText::new(label).color(pal.text_muted));
+                                        let r = ui.add_sized(
+                                            egui::vec2(ui.available_width(), ds::CONTROL_MD),
+                                            egui::TextEdit::singleline(text)
+                                                .align(egui::Align2::LEFT_CENTER),
+                                        );
+                                        r.widget_info(|| {
+                                            egui::WidgetInfo::labeled(
+                                                egui::Role::TextInput,
+                                                true,
+                                                label,
+                                            )
+                                        });
+                                        ui.end_row();
+                                    }
+                                });
+                        };
+                        section(ui, "Branches");
+                        grid(
+                            ui,
+                            "flow-branches",
+                            vec![
+                                ("Production branch", &mut config.master),
+                                ("Development branch", &mut config.develop),
+                            ],
+                        );
+                        section(ui, "Prefixes");
+                        grid(
+                            ui,
+                            "flow-prefixes",
+                            vec![
+                                ("Feature", &mut config.feature),
+                                ("Bugfix", &mut config.bugfix),
+                                ("Release", &mut config.release),
+                                ("Hotfix", &mut config.hotfix),
+                                ("Version tag", &mut config.versiontag),
+                            ],
+                        );
+                        let c = git::FlowConfig {
+                            master: config.master.trim().into(),
+                            develop: config.develop.trim().into(),
+                            feature: config.feature.trim().into(),
+                            bugfix: config.bugfix.trim().into(),
+                            release: config.release.trim().into(),
+                            hotfix: config.hotfix.trim().into(),
+                            versiontag: config.versiontag.trim().into(),
+                        };
+                        let (m, d) = (c.master.as_str(), c.develop.as_str());
                         let has = |b: &str| data.is_some_and(|data| data.local(b).is_some());
+                        let bad_prefix = c.prefixes().into_iter().find_map(|(kind, p)| {
+                            ref_name_problem(&format!("{p}x"))
+                                .filter(|_| !p.is_empty())
+                                .map(|e| format!("{} prefix: {e}", kind.name()))
+                        });
                         let problem = if !has(m) {
                             Some(format!("There is no local branch {m}"))
                         } else if m == d {
                             Some("Use two different branches".into())
-                        } else if has(d) {
-                            None
+                        } else if !has(d)
+                            && let Some(e) = ref_name_problem(d)
+                        {
+                            Some(e.to_string())
+                        } else if let Some(e) = c.prefix_problem().or(bad_prefix) {
+                            Some(e)
+                        } else if !c.versiontag.is_empty()
+                            && let Some(e) = ref_name_problem(&format!("{}1", c.versiontag))
+                        {
+                            Some(format!("Version tag: {e}"))
                         } else {
-                            ref_name_problem(d).map(str::to_string)
+                            None
                         };
                         let note = match &problem {
                             Some(p) => RichText::new(p.as_str()).color(pal.danger),
                             None if has(d) => RichText::new(
-                                "Branches start with feature/, bugfix/, release/ and hotfix/.",
+                                "Releases and hotfixes are tagged with the version tag prefix \
+                                 and their name.",
                             )
                             .color(pal.text_muted),
-                            None => RichText::new(format!(
-                                "Creates {d} from {m}. Branches start with feature/, bugfix/, \
-                                 release/ and hotfix/."
-                            ))
-                            .color(pal.text_muted),
+                            None => RichText::new(format!("Creates {d} from {m}."))
+                                .color(pal.text_muted),
                         };
+                        ui.add_space(4.0);
                         ui.add(egui::Label::new(note.size(12.0)).wrap());
                         actions(ui, &mut |ui| {
                             let valid = problem.is_none();
-                            if ds::Button::new("Initialize")
+                            let label = if *update { "Save" } else { "Initialize" };
+                            if ds::Button::new(label)
                                 .primary()
                                 .enabled(valid)
                                 .show(ui, &pal)
                                 .clicked()
                                 || (valid && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                             {
-                                submit = Some(Op::FlowInit {
-                                    master: m.to_string(),
-                                    develop: d.to_string(),
-                                });
+                                submit = Some(Op::FlowInit { config: c.clone() });
                             }
                             if ds::Button::new("Cancel").quiet().show(ui, &pal).clicked() {
                                 close = true;
@@ -462,7 +521,8 @@ pub(super) fn modal_title(m: &Modal) -> String {
             InputKind::Rename { old } => format!("Rename {old}"),
             InputKind::FlowStart { kind } => format!("Start {}", kind.name()),
         },
-        Modal::FlowInit { .. } => "Initialize git flow".into(),
+        Modal::FlowInit { update: false, .. } => "Initialize git flow".into(),
+        Modal::FlowInit { update: true, .. } => "Git flow settings".into(),
         Modal::Settings => "Settings".into(),
         Modal::Clone { .. } => "Clone repository".into(),
         Modal::Notice { title, .. } => title.clone(),
