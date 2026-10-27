@@ -999,7 +999,11 @@ mod tests {
         call(&mut s, "demo_repo", json!({}));
         call(&mut s, "click", json!({"label": "Settings"}));
         let (err, out) = call(&mut s, "click", json!({"label": NAME}));
-        assert!(!err, "{out}");
+        assert!(
+            !err,
+            "{out}\n{}",
+            call(&mut s, "widgets", json!({"limit": 400})).1
+        );
         let state: Value =
             serde_json::from_str(&call(&mut s, "state", json!({"commits": 0})).1).unwrap();
         assert_eq!(state["theme_name"], NAME);
@@ -1255,7 +1259,12 @@ mod tests {
         git(&["switch", "-q", "develop"]);
         let remote = git(&["rev-parse", "--short", "origin/develop"]);
         assert_ne!(git(&["rev-parse", "--short", "develop"]), remote);
+        // Reload now: noticing the switch on its own would move the graph under the click.
+        call(&mut s, "key", json!({"key": "F5"}));
         call(&mut s, "wait_idle", json!({}));
+        let state: Value =
+            serde_json::from_str(&call(&mut s, "state", json!({"commits": 0})).1).unwrap();
+        assert_eq!(state["tabs"][0]["head_branch"], "develop");
 
         let (err, out) = call(
             &mut s,
@@ -2188,18 +2197,15 @@ mod tests {
     /// when tool calls are hidden, and the time); Stop ends it.
     #[test]
     fn agent_shows_that_it_is_working() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("bb-busy-claude-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("claude");
-        std::fs::write(
+        crate::agent::tests::fake_script(
             &script,
             "#!/bin/sh\ncat > /dev/null\n\
              echo '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"mcp__branchblitz__sync\",\"input\":{\"action\":\"fetch\"}}]}}'\n\
              sleep 30\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
         let mut s = Server::default();
         call(&mut s, "demo_repo", json!({}));
         s.session

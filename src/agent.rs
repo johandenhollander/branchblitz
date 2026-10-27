@@ -546,7 +546,7 @@ fn describe_tool(name: &str, input: &Value) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::sync::mpsc;
 
@@ -660,18 +660,31 @@ mod tests {
         );
     }
 
+    /// Writes an executable script for a test to run. A child process writes it: a write handle
+    /// in this process can leak into a child another test forks meanwhile, and running the
+    /// script then fails with "Text file busy".
+    #[cfg(unix)]
+    pub(crate) fn fake_script(path: &Path, text: &str) {
+        let mut sh = Command::new("sh")
+            .args(["-c", "cat > \"$0\" && chmod 755 \"$0\""])
+            .arg(path)
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        sh.stdin.take().unwrap().write_all(text.as_bytes()).unwrap();
+        assert!(sh.wait().unwrap().success());
+    }
+
     /// The process side, with a fake `claude`: Stop ends a hanging answer quickly, and a crash
     /// shows its last stderr line.
     #[cfg(unix)]
     #[test]
     fn claude_process_stops_and_reports_failures() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("bb-fake-claude-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let script = |name: &str, body: &str| {
             let p = dir.join(name);
-            std::fs::write(&p, format!("#!/bin/sh\ncat > /dev/null\n{body}\n")).unwrap();
-            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            fake_script(&p, &format!("#!/bin/sh\ncat > /dev/null\n{body}\n"));
             Backend::Claude(p)
         };
         let run = |backend: &Backend, stop_after_text: bool| {
@@ -701,7 +714,7 @@ sleep 30"#,
         );
         let (c, took) = run(&hang, true);
         assert!(took < Duration::from_secs(5), "stopped in {took:?}");
-        assert_eq!(c.session.as_deref(), Some("s9"));
+        assert_eq!(c.session.as_deref(), Some("s9"), "{:?}", c.messages);
         assert_eq!(c.messages.last().unwrap().text, "Stopped");
 
         let crash = script("crash", "echo 'boom: no credentials' >&2\nexit 3");

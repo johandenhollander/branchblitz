@@ -85,12 +85,19 @@ impl Watcher {
 
 static WATCHER: Mutex<Option<Watcher>> = Mutex::new(None);
 
+// Tests run in parallel and each drives its app on its own thread: a test that points the system
+// theme at a file gets a watcher of its own, so other tests' polls never reach it.
+#[cfg(test)]
+thread_local! {
+    static TEST_WATCHER: std::cell::RefCell<Option<Watcher>> = const { std::cell::RefCell::new(None) };
+}
+
 /// Points the system theme at `file` instead of Omarchy's.
 #[cfg(test)]
 pub fn use_file(file: PathBuf) {
     let mut w = Watcher::new(Some(file));
     w.check();
-    *WATCHER.lock().unwrap_or_else(|e| e.into_inner()) = Some(w);
+    TEST_WATCHER.with(|t| *t.borrow_mut() = Some(w));
 }
 
 /// Makes the next `poll` look at the file.
@@ -100,6 +107,10 @@ pub fn expire() {
 }
 
 fn with<R>(f: impl FnOnce(&mut Watcher) -> R) -> R {
+    #[cfg(test)]
+    if TEST_WATCHER.with(|t| t.borrow().is_some()) {
+        return TEST_WATCHER.with(|t| f(t.borrow_mut().as_mut().unwrap()));
+    }
     let mut guard = WATCHER.lock().unwrap_or_else(|e| e.into_inner());
     f(guard.get_or_insert_with(|| {
         let mut w = Watcher::new(path());
