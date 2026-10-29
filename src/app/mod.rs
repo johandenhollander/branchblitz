@@ -165,6 +165,7 @@ pub enum InputKind {
     Branch {
         at: String,
     },
+    /// Like `Branch`, without the checkout.
     Tag {
         at: String,
     },
@@ -175,6 +176,16 @@ pub enum InputKind {
     FlowStart {
         kind: git::FlowKind,
     },
+}
+
+impl InputKind {
+    /// The commit whose row in the graph gets the name field instead of a dialog.
+    pub fn named_in_graph(&self) -> Option<&str> {
+        match self {
+            InputKind::Branch { at } | InputKind::Tag { at } => Some(at),
+            _ => None,
+        }
+    }
 }
 
 enum Modal {
@@ -296,9 +307,11 @@ pub struct Find {
     pub searching: u32,
 }
 
+/// The name field for a new branch or tag, on its commit's row in the graph.
 pub struct NewBranch {
     pub at: String,
     pub name: String,
+    pub tag: bool,
     /// Focus was asked for; losing it from then on cancels.
     pub focused: bool,
 }
@@ -324,7 +337,12 @@ pub struct BranchBlitz {
     ctx: egui::Context,
     next_id: u64,
     modal: Option<Modal>,
-    open_path: String,
+    /// The search field on the welcome screen.
+    recent_filter: String,
+    /// The welcome screen's search field asks for focus on its next frame.
+    focus_welcome: bool,
+    /// The tab to return to when the welcome screen ("New tab") is closed.
+    back_to: Option<u64>,
     status_line: Option<(bool, String)>,
     was_focused: bool,
     /// Driven by the MCP server: no window, so no dialogs of our own.
@@ -394,7 +412,9 @@ impl BranchBlitz {
             ctx: cc.egui_ctx.clone(),
             next_id: 1,
             modal: None,
-            open_path: String::new(),
+            recent_filter: String::new(),
+            focus_welcome: true,
+            back_to: None,
             status_line: None,
             was_focused: true,
             headless: false,

@@ -1148,8 +1148,8 @@ pub fn graph_view(
         .data_mut(|d| d.insert_temp(ui.scope_id().with("graph-offset"), off));
 }
 
-/// The name field for a new branch. Enter with a usable name creates the branch and checks it
-/// out; Escape, Enter on an empty field or clicking elsewhere drops it. Returns true when the
+/// The name field for a new branch or tag. Enter with a usable name creates it (a branch is
+/// checked out); Escape, Enter on an empty field or clicking elsewhere drops it. Returns true when the
 /// field is done.
 fn branch_name_field(
     ui: &mut Ui,
@@ -1177,7 +1177,11 @@ fn branch_name_field(
                 egui::TextEdit::singleline(&mut b.name)
                     // A fixed id, so scrolling (which renumbers the rows) keeps the focus.
                     .id(egui::Id::unique(("new-branch", &b.at)))
-                    .hint_text("enter branch name")
+                    .hint_text(if b.tag {
+                        "enter tag name"
+                    } else {
+                        "enter branch name"
+                    })
                     .margin(egui::Margin::symmetric(8, 4))
                     .align(egui::Align2::LEFT_CENTER),
             )
@@ -1185,6 +1189,7 @@ fn branch_name_field(
         .inner;
     let resp = match shown {
         Some(p) => resp.on_hover_text(p),
+        None if b.tag => resp.on_hover_text("Enter creates the tag, Escape cancels"),
         None => resp.on_hover_text("Enter creates the branch and checks it out, Escape cancels"),
     };
     if !b.focused {
@@ -1202,10 +1207,17 @@ fn branch_name_field(
             resp.request_focus();
             return false;
         }
-        acts.push(Action::Op(Op::CreateBranch {
-            name,
-            at: b.at.clone(),
-            checkout: true,
+        acts.push(Action::Op(if b.tag {
+            Op::CreateTag {
+                name,
+                at: b.at.clone(),
+            }
+        } else {
+            Op::CreateBranch {
+                name,
+                at: b.at.clone(),
+                checkout: true,
+            }
         }));
         return true;
     }

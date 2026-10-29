@@ -145,7 +145,7 @@ impl BranchBlitz {
                 v["new_branch"] = json!(
                     t.new_branch
                         .as_ref()
-                        .map(|b| json!({"at": b.at, "name": b.name}))
+                        .map(|b| json!({"at": b.at, "name": b.name, "tag": b.tag}))
                 );
                 v["diff_open"] = json!(t.diff.as_ref().map(|(d, _)| format!("{d:?}")));
                 v["file_view"] = json!(t.file_view.as_ref().map(|f| f.summary()));

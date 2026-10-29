@@ -80,15 +80,20 @@ impl BranchBlitz {
                     self.apply(i, vec![Action::Select(Selection::Commit(sha))]);
                 }
                 // On a row of the graph; a commit outside the loaded history gets the dialog.
-                Action::Input(InputKind::Branch { at })
-                    if self.tabs[i].row_of.contains_key(&at) =>
+                Action::Input(kind)
+                    if kind
+                        .named_in_graph()
+                        .is_some_and(|at| self.tabs[i].row_of.contains_key(at)) =>
                 {
+                    let tag = matches!(kind, InputKind::Tag { .. });
+                    let at = kind.named_in_graph().unwrap_or_default().to_string();
                     let tab = &mut self.tabs[i];
                     let row = tab.row_of[&at];
                     tab.scroll_to = Some(row + tab.has_wip_row() as usize);
                     tab.new_branch = Some(NewBranch {
                         at,
                         name: String::new(),
+                        tag,
                         focused: false,
                     });
                 }

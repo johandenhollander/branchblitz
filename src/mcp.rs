@@ -2790,6 +2790,85 @@ mod tests {
         assert!(st["tabs"][0]["new_branch"].is_null());
     }
 
+    /// A tag is named in the graph like a branch, and nothing is checked out.
+    #[test]
+    fn new_tag_is_named_in_the_graph() {
+        let mut s = Server::default();
+        call(&mut s, "demo_repo", json!({}));
+        let h = s.session.as_mut().unwrap();
+        let at = h.state_mut().tabs_mut()[0].data.as_ref().unwrap().commits[1]
+            .sha
+            .clone();
+        h.state_mut()
+            .apply(0, vec![Action::Input(InputKind::Tag { at })]);
+        h.run_steps(2);
+        let state = |s: &mut Server| -> Value {
+            serde_json::from_str(&call(s, "state", json!({"commits": 0})).1).unwrap()
+        };
+        let st = state(&mut s);
+        assert!(st["dialog"].is_null(), "no dialog: {st}");
+        assert_eq!(st["tabs"][0]["new_branch"]["tag"], json!(true), "{st}");
+        let head = st["tabs"][0]["head_branch"].clone();
+        call(&mut s, "type_text", json!({"text": "v-inline"}));
+        if std::env::var_os("BB_SAVE_SHOTS").is_some()
+            && let Some(d) = s.call("screenshot", &json!({}))["content"][0]["data"].as_str()
+        {
+            let png = base64::engine::general_purpose::STANDARD.decode(d).unwrap();
+            std::fs::write(std::env::temp_dir().join("bb-new-tag.png"), png).unwrap();
+        }
+        call(&mut s, "key", json!({"key": "Enter"}));
+        call(&mut s, "wait_idle", json!({}));
+        let st = state(&mut s);
+        assert!(st["tabs"][0]["new_branch"].is_null(), "{st}");
+        assert!(
+            st["tabs"][0]["tags"].to_string().contains("v-inline"),
+            "{st}"
+        );
+        assert_eq!(st["tabs"][0]["head_branch"], head);
+    }
+
+    /// The welcome screen is a "New tab": closing it, or Escape, returns to the repository.
+    #[test]
+    fn new_tab_closes_back_to_the_repository() {
+        let mut s = Server::default();
+        call(&mut s, "demo_repo", json!({}));
+        let active = |s: &mut Server| -> bool {
+            let st: Value =
+                serde_json::from_str(&call(s, "state", json!({"commits": 0})).1).unwrap();
+            st["tabs"][0]["active"] == json!(true)
+        };
+        call(&mut s, "click", json!({"label": "Open repository"}));
+        assert!(!active(&mut s));
+        // The search field has the focus and filters the recent repositories.
+        if std::env::var_os("BB_SAVE_SHOTS").is_some()
+            && let Some(d) = s.call("screenshot", &json!({}))["content"][0]["data"].as_str()
+        {
+            let png = base64::engine::general_purpose::STANDARD.decode(d).unwrap();
+            std::fs::write(std::env::temp_dir().join("bb-new-tab-empty.png"), png).unwrap();
+        }
+        call(&mut s, "type_text", json!({"text": "no-such-repository"}));
+        let (_, w) = call(&mut s, "widgets", json!({}));
+        assert!(w.contains("No recent repository matches"), "{w}");
+        let (err, out) = call(&mut s, "click", json!({"label": "Close New tab"}));
+        assert!(!err, "{out}");
+        assert!(active(&mut s));
+        call(&mut s, "click", json!({"label": "Open repository"}));
+        call(&mut s, "key", json!({"key": "Escape"}));
+        assert!(active(&mut s));
+
+        // With two tabs it returns to the one it came from, not the last one.
+        call(&mut s, "demo_repo", json!({}));
+        let h = s.session.as_mut().unwrap();
+        h.state_mut().move_tab(1, 0);
+        h.run_steps(2);
+        assert!(active(&mut s), "the moved tab stays active");
+        call(&mut s, "click", json!({"label": "Open repository"}));
+        call(&mut s, "click", json!({"label": "Close New tab"}));
+        let st: Value =
+            serde_json::from_str(&call(&mut s, "state", json!({"commits": 0})).1).unwrap();
+        assert_eq!(st["tabs"][0]["active"], json!(true), "{st}");
+    }
+
     /// A commit outside the loaded history has no row to put the field on: the dialog opens.
     #[test]
     fn new_branch_on_an_unloaded_commit_uses_the_dialog() {

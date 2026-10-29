@@ -230,6 +230,84 @@ impl BranchBlitz {
                 }
                 resp.on_hover_text(tab.path.display().to_string());
             }
+            // The welcome screen is a tab of its own, GitKraken style: closing it (or Escape)
+            // returns to the repository it was opened from.
+            if self.active.is_none() {
+                let name = "New tab";
+                let g = ui
+                    .painter()
+                    .layout_job(ds::text_job(name, 12.5, 500.0, pal.text, false));
+                let closable = !self.tabs.is_empty();
+                let w = 12.0 + g.size().x + if closable { 8.0 + 18.0 + 8.0 } else { 12.0 };
+                let (rect, resp) =
+                    ui.allocate_exact_size(egui::vec2(w, 30.0), egui::Sense::click());
+                resp.widget_info(|| {
+                    egui::WidgetInfo::selected(egui::Role::Button, true, true, name)
+                });
+                let r = egui::CornerRadius {
+                    nw: theme::RADIUS_MD,
+                    ne: theme::RADIUS_MD,
+                    sw: 0,
+                    se: 0,
+                };
+                let p = ui.painter();
+                p.rect_filled(rect, r, pal.canvas);
+                p.rect_filled(
+                    egui::Rect::from_min_max(
+                        egui::pos2(rect.left() + 8.0, rect.top()),
+                        egui::pos2(rect.right() - 8.0, rect.top() + 2.0),
+                    ),
+                    egui::CornerRadius {
+                        sw: 2,
+                        se: 2,
+                        ..Default::default()
+                    },
+                    pal.accent,
+                );
+                let yc = rect.center().y;
+                p.galley(
+                    egui::pos2(rect.left() + 12.0, yc - g.size().y / 2.0),
+                    g,
+                    pal.text,
+                );
+                if closable {
+                    let close_rect = egui::Rect::from_center_size(
+                        egui::pos2(rect.right() - 8.0 - 9.0, yc),
+                        egui::vec2(18.0, 18.0),
+                    );
+                    let x = ui.interact(close_rect, resp.id.with("close"), egui::Sense::click());
+                    x.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::Role::Button, true, "Close New tab")
+                    });
+                    if x.hovered() {
+                        ui.painter().rect_filled(
+                            close_rect,
+                            egui::CornerRadius::same(theme::RADIUS_XS),
+                            pal.hover,
+                        );
+                    }
+                    ds::paint_icon(
+                        ui.painter(),
+                        close_rect.center(),
+                        icons::X,
+                        12.0,
+                        if x.hovered() {
+                            pal.text
+                        } else {
+                            pal.text_subtle
+                        },
+                    );
+                    let escape = self.modal.is_none()
+                        && !egui::Popup::is_any_open(ui.ctx())
+                        && ui.input(|i| i.key_pressed(egui::Key::Escape));
+                    if x.clicked() || resp.middle_clicked() || escape {
+                        let back = self
+                            .back_to
+                            .and_then(|id| self.tabs.iter().position(|t| t.id == id));
+                        switch = Some(back.unwrap_or(self.tabs.len() - 1));
+                    }
+                }
+            }
             let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::click());
             let rect = egui::Rect::from_center_size(
                 rect.center() - egui::vec2(0.0, 1.0),
@@ -256,8 +334,11 @@ impl BranchBlitz {
                     pal.text_subtle
                 },
             );
-            if resp.on_hover_text("Open repository").clicked() {
+            if resp.on_hover_text("New tab").clicked() && self.active.is_some() {
+                self.back_to = self.active.map(|i| self.tabs[i].id);
                 self.active = None;
+                self.recent_filter.clear();
+                self.focus_welcome = true;
             }
         });
         if let Some(i) = close {
@@ -649,44 +730,63 @@ impl BranchBlitz {
             {
                 self.open_clone();
             }
-            ui.add_space(12.0);
+            ui.add_space(20.0);
+            // Search the recent repositories; a path typed in (/ or ~) opens on Enter too.
+            let query = self.recent_filter.trim().to_string();
+            let needle = query.to_lowercase();
+            let shown: Vec<PathBuf> = self
+                .settings
+                .recent
+                .iter()
+                .filter(|p| p.display().to_string().to_lowercase().contains(&needle))
+                .cloned()
+                .collect();
+            let is_path = query.starts_with('/') || query.starts_with('~');
             ui.allocate_ui_with_layout(
                 egui::vec2(w, ds::CONTROL_MD),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    let open_btn = 72.0;
-                    let resp = ui
-                        .allocate_ui(egui::vec2(w - open_btn - 8.0, ds::CONTROL_MD), |ui| {
-                            ui.add_sized(
-                                egui::vec2(w - open_btn - 8.0, ds::CONTROL_MD),
-                                egui::TextEdit::singleline(&mut self.open_path)
-                                    .hint_text("/path/to/repository")
-                                    .align(egui::Align2::LEFT_CENTER),
-                            )
-                        })
-                        .inner;
-                    let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if ds::Button::new("Open")
-                        .size(egui::vec2(open_btn, ds::CONTROL_MD))
-                        .show(ui, pal)
-                        .clicked()
-                        || enter
-                    {
-                        open = Some(expand_home(self.open_path.trim()));
+                    let resp = ds::search_field(
+                        ui,
+                        pal,
+                        &mut self.recent_filter,
+                        "Search recent repositories or enter a path",
+                        None,
+                    );
+                    if std::mem::take(&mut self.focus_welcome) {
+                        resp.request_focus();
+                    }
+                    if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        // A typed path wins over a recent one that merely contains it.
+                        open = if is_path {
+                            Some(expand_home(&query))
+                        } else {
+                            shown.first().cloned()
+                        };
                     }
                 },
             );
-            ui.add_space(28.0);
-            if !self.settings.recent.is_empty() {
+            ui.add_space(20.0);
+            let hint = if is_path {
+                Some("Enter opens this path")
+            } else {
+                (!query.is_empty() && shown.is_empty()).then_some("No recent repository matches")
+            };
+            if hint.is_some() || !shown.is_empty() {
                 ui.allocate_ui_with_layout(
                     egui::vec2(w, 0.0),
                     egui::Layout::top_down(egui::Align::LEFT),
                     |ui| {
-                        ui.label(ds::caption("Recent", pal));
-                        ui.add_space(4.0);
+                        if let Some(hint) = hint {
+                            ui.label(RichText::new(hint).color(pal.text_muted));
+                            ui.add_space(12.0);
+                        }
+                        if !shown.is_empty() {
+                            ui.label(ds::caption("Recent", pal));
+                            ui.add_space(4.0);
+                        }
                         ui.spacing_mut().item_spacing.y = 0.0;
-                        for p in self.settings.recent.clone() {
+                        for p in shown {
                             let name = p
                                 .file_name()
                                 .map(|s| s.to_string_lossy().into_owned())
@@ -730,6 +830,7 @@ impl BranchBlitz {
             }
         });
         if let Some(p) = open {
+            self.recent_filter.clear();
             self.open_repo(&p, true);
         }
     }
