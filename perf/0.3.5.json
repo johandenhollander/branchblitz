@@ -1,0 +1,20 @@
+{
+  "version": "0.3.5",
+  "date": "2026-10-29",
+  "machine": "Intel(R) Core(TM) Ultra 7 155H",
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "repo": "scripts/perf-repo.sh: 20000 commits on main, 61 branches, 50 tags",
+  "metrics": {
+    "colors_10000_ms": 1.1,
+    "diff_ms": 1.8,
+    "frame_idle_p50_ms": 0.2,
+    "frame_scroll_p50_ms": 0.5,
+    "frame_scroll_p95_ms": 0.6,
+    "graph_10000_ms": 1.4,
+    "load_10000_ms": 95.1,
+    "load_2000_ms": 46.0,
+    "open_to_graph_ms": 54.9,
+    "rss_peak_mb": 26.1,
+    "binary_mb": 21.1
+  }
+}
