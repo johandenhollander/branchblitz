@@ -18,14 +18,12 @@ pub(super) fn spawn_worker(
         // Highest load request seen; every load sent afterwards includes it.
         let mut generation = 0;
         // Remote tags are only known after a fetch; every load carries the last answer.
-        let mut remote_tags: Option<HashMap<String, String>> = None;
+        let mut remote_tags: Option<git::RemoteTags> = None;
         // Changes made outside the app (a stage in a terminal) are noticed by polling the stat of
         // git's own files; taken right before each load so the app's own changes don't count.
         let mut paths = git::watch_paths(&path).unwrap_or_default();
         let mut seen = git::fingerprint(&paths);
-        let load = |paths: &[PathBuf],
-                    seen: &mut Vec<_>,
-                    remote_tags: &Option<HashMap<String, String>>| {
+        let load = |paths: &[PathBuf], seen: &mut Vec<_>, remote_tags: &Option<git::RemoteTags>| {
             *seen = git::fingerprint(paths);
             git::load(&path, limit.load(Ordering::Relaxed)).map(|mut d| {
                 d.remote_tags = remote_tags.clone();
@@ -78,7 +76,7 @@ pub(super) fn spawn_worker(
                         }
                         let result = op.run(&path, last.as_ref());
                         if result.is_ok()
-                            && let Op::PushTag { name, .. } = &op
+                            && let Op::PushTag { remote, name } = &op
                             && let Some(t) = &mut remote_tags
                             && let Some(r) = last.as_ref().and_then(|d| {
                                 d.refs
@@ -86,7 +84,9 @@ pub(super) fn spawn_worker(
                                     .find(|r| r.kind == git::RefKind::Tag && &r.name == name)
                             })
                         {
-                            t.insert(name.clone(), r.target.clone());
+                            let on = t.entry(name.clone()).or_default();
+                            on.retain(|(r, _)| r != remote);
+                            on.push((remote.clone(), r.target.clone()));
                         }
                         let check_tags = result.is_ok() && matches!(op, Op::Fetch | Op::Pull(_));
                         // Reload before reporting so the graph is current when the spinner stops.

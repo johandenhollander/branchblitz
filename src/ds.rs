@@ -483,7 +483,7 @@ pub struct ChipKind {
     pub remote: bool,
     pub tag: bool,
     pub default: bool,
-    /// A tag that is not on any remote yet: drawn with a dashed border.
+    /// A tag that is not on any remote at this commit (not pushed, or moved): a dashed border.
     pub unpushed: bool,
     /// A local branch checked out in another worktree: a tree instead of the branch icon.
     pub worktree: bool,

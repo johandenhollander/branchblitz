@@ -624,8 +624,12 @@ fn ref_leaf(
         ),
         None => "\nDouble-click to check out".into(),
     };
+    let note = data
+        .tag_note(r)
+        .map(|n| format!("\n{n}"))
+        .unwrap_or_default();
     let resp = resp.on_hover_text(format!(
-        "{}{tracks}{double}, right-click for actions",
+        "{}{tracks}{note}{double}, right-click for actions",
         r.name
     ));
     if resp.double_clicked() {

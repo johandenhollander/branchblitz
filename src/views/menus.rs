@@ -376,7 +376,33 @@ pub fn ref_menu(
         RefKind::Tag => {
             ds::menu_divider(ui, pal);
             let pushed = data.tag_on_remote(r) == Some(true);
-            if let Some(remote) = data.default_remote().filter(|_| !pushed) {
+            if let Some((remote, sha)) = data.tag_moved(r) {
+                act(
+                    ui,
+                    icons::DOWNLOAD,
+                    format!("Update tag from {remote}"),
+                    Some(format!(
+                        "Update tag {} to {} as on {remote}",
+                        r.name,
+                        git::short(sha)
+                    )),
+                    // Overwrites the local tag; if it was retagged here, that is lost.
+                    Action::Confirm {
+                        title: format!("Update tag {} from {remote}?", r.name),
+                        body: format!(
+                            "The tag moves from {} to {}, where it is on {remote}.",
+                            git::short(&r.target),
+                            git::short(sha)
+                        ),
+                        op: Op::UpdateTag {
+                            remote: remote.to_string(),
+                            name: r.name.clone(),
+                        },
+                        danger: false,
+                    },
+                    acts,
+                );
+            } else if let Some(remote) = data.default_remote().filter(|_| !pushed) {
                 act(
                     ui,
                     icons::UPLOAD,

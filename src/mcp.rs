@@ -1162,7 +1162,7 @@ mod tests {
 
         // Moved locally to another commit: no longer the tag that is on the remote.
         let ok = std::process::Command::new("git")
-            .args(["-C", &work, "tag", "-f", "v3.1.4", "HEAD"])
+            .args(["-C", &work, "tag", "-f", "v3.1.4", "v3.1.4~1"])
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .output()
             .unwrap();
@@ -1175,9 +1175,57 @@ mod tests {
             .unwrap()
             .iter()
             .find(|t| t["name"] == "v3.1.4")
-            .unwrap()["on_remote"]
+            .unwrap()
             .clone();
-        assert_eq!(moved, json!(false));
+        assert_eq!(moved["on_remote"], json!(false));
+        let remote_commit = moved["remote_commit"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        assert!(remote_commit.starts_with("origin "), "{moved}");
+
+        // Moved, not unpushed: the menu offers to take the remote's tag instead of pushing.
+        let (err, out) = call(
+            &mut s,
+            "click",
+            json!({"label": "v3.1.4", "button": "right"}),
+        );
+        assert!(!err, "{out}");
+        let (_, w) = call(&mut s, "widgets", json!({}));
+        assert!(!w.contains("Push tag to origin"), "{w}");
+        let label = w
+            .lines()
+            .find(|l| l.contains("Update tag v3.1.4 to"))
+            .unwrap_or_else(|| panic!("{w}"));
+        let label = label[label.find("Update").unwrap()..]
+            .split('"')
+            .next()
+            .unwrap()
+            .to_string();
+        let (err, out) = call(&mut s, "click", json!({ "label": label }));
+        assert!(!err, "{out}");
+        // It overwrites the local tag, so it asks first.
+        let (err, out) = call(
+            &mut s,
+            "click",
+            json!({"label": "Update tag v3.1.4 from origin", "role": "Button"}),
+        );
+        assert!(!err, "{out}");
+        call(&mut s, "wait_idle", json!({}));
+        let state: Value =
+            serde_json::from_str(&call(&mut s, "state", json!({"commits": 0})).1).unwrap();
+        let tag = state["tabs"][0]["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "v3.1.4")
+            .unwrap()
+            .clone();
+        assert_eq!(tag["on_remote"], json!(true), "{tag}");
+        assert_eq!(
+            format!("origin {}", tag["commit"].as_str().unwrap()),
+            remote_commit
+        );
     }
 
     /// With two remotes a branch that is the same on both shows as one chip; where they differ,

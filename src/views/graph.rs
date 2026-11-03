@@ -979,9 +979,13 @@ pub fn graph_view(
                         .map(|&i| data.refs[i].name.clone())
                         .collect();
                     let note = if pill.kind.default {
-                        "\ndefault branch of the remote"
+                        "\ndefault branch of the remote".to_string()
                     } else {
-                        ""
+                        pill.refs
+                            .iter()
+                            .find_map(|&i| data.tag_note(&data.refs[i]))
+                            .map(|n| format!("\n{n}"))
+                            .unwrap_or_default()
                     };
                     let presp = presp.on_hover_text(format!(
                         "{}{note}\nRight-click for actions",

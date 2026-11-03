@@ -337,9 +337,9 @@ pub struct RepoData {
     /// Default branch per remote (`origin/HEAD` → `origin/develop`).
     pub default_branches: Vec<String>,
     pub flow: GitFlow,
-    /// Tags on the remotes (name → commit), from the last fetch (`git ls-remote`). `None` until
-    /// known, so a tag is never shown as unpushed by mistake.
-    pub remote_tags: Option<HashMap<String, String>>,
+    /// Tags on the remotes, from the last fetch (`git ls-remote`). `None` until known, so a tag
+    /// is never shown as unpushed by mistake.
+    pub remote_tags: Option<RemoteTags>,
     /// The worktrees of this repository (main first, this one included) when it has more
     /// than one. Git refuses to check out a branch that another worktree has.
     pub worktrees: Vec<Worktree>,
@@ -733,15 +733,18 @@ fn parse_worktrees(out: &str, repo: &Path) -> Vec<Worktree> {
     list
 }
 
-/// Tags on the remotes (network): name → the commit it points to (annotated tags peeled).
-/// Fails if any remote cannot be asked.
-pub fn remote_tags(repo: &Path, remotes: &[String]) -> Result<HashMap<String, String>, String> {
-    let mut tags = HashMap::new();
+/// Tag name → (remote, commit) for each remote that has it; annotated tags peeled.
+pub type RemoteTags = HashMap<String, Vec<(String, String)>>;
+
+/// Tags on the remotes (network). Fails if any remote cannot be asked.
+pub fn remote_tags(repo: &Path, remotes: &[String]) -> Result<RemoteTags, String> {
+    let mut tags = RemoteTags::new();
     for remote in remotes {
         if remote.starts_with('-') {
             continue;
         }
         let out = git_network(repo, &["ls-remote", "--tags", remote])?;
+        let mut here = HashMap::new();
         for line in out.lines() {
             let Some((sha, name)) = line.split_once('\t') else {
                 continue;
@@ -752,13 +755,16 @@ pub fn remote_tags(repo: &Path, remotes: &[String]) -> Result<HashMap<String, St
             // `v1^{}` is the commit an annotated tag `v1` points to; it wins over the tag object.
             match name.strip_suffix("^{}") {
                 Some(tag) => {
-                    tags.insert(tag.to_string(), sha.to_string());
+                    here.insert(tag.to_string(), sha.to_string());
                 }
                 None => {
-                    tags.entry(name.to_string())
+                    here.entry(name.to_string())
                         .or_insert_with(|| sha.to_string());
                 }
             }
+        }
+        for (name, sha) in here {
+            tags.entry(name).or_default().push((remote.clone(), sha));
         }
     }
     Ok(tags)
@@ -767,9 +773,43 @@ pub fn remote_tags(repo: &Path, remotes: &[String]) -> Result<HashMap<String, St
 impl RepoData {
     /// Whether tag `r` is on a remote, at the same commit. `None` if that is not known yet.
     pub fn tag_on_remote(&self, r: &RefInfo) -> Option<bool> {
-        self.remote_tags
-            .as_ref()
-            .map(|t| t.get(&r.name) == Some(&r.target))
+        self.remote_tags.as_ref().map(|t| {
+            t.get(&r.name)
+                .is_some_and(|on| on.iter().any(|(_, sha)| *sha == r.target))
+        })
+    }
+
+    /// The remote and commit of tag `r` when a remote has it at another commit (moved there,
+    /// or here) and none has it at this one.
+    pub fn tag_moved(&self, r: &RefInfo) -> Option<(&str, &str)> {
+        if self.tag_on_remote(r) != Some(false) {
+            return None;
+        }
+        let on = self.remote_tags.as_ref()?.get(&r.name)?;
+        let default = self.default_remote();
+        on.iter()
+            .find(|(remote, _)| Some(remote.as_str()) == default)
+            .or(on.first())
+            .map(|(remote, sha)| (remote.as_str(), sha.as_str()))
+    }
+
+    /// A tooltip line on where tag `r` stands on the remotes, if it is not simply there.
+    pub fn tag_note(&self, r: &RefInfo) -> Option<String> {
+        if r.kind != RefKind::Tag || self.tag_on_remote(r) != Some(false) {
+            return None;
+        }
+        Some(match self.tag_moved(r) {
+            Some((remote, sha)) => {
+                let subject = self
+                    .commits
+                    .iter()
+                    .find(|c| c.sha == sha)
+                    .map(|c| format!(" ({})", c.subject.chars().take(48).collect::<String>()))
+                    .unwrap_or_default();
+                format!("On {remote} this tag points to {}{subject}", short(sha))
+            }
+            None => "Not on any remote yet".into(),
+        })
     }
 }
 
@@ -1482,6 +1522,11 @@ pub enum Op {
         remote: String,
         name: String,
     },
+    /// Set tag `name` to where it is on `remote` (it was moved there).
+    UpdateTag {
+        remote: String,
+        name: String,
+    },
     CherryPick(String),
     Revert(String),
     Reset {
@@ -1587,6 +1632,7 @@ impl Op {
             Op::CreateTag { name, .. } => format!("Create tag {name}"),
             Op::DeleteTag(t) => format!("Delete tag {t}"),
             Op::PushTag { name, .. } => format!("Push tag {name}"),
+            Op::UpdateTag { remote, name } => format!("Update tag {name} from {remote}"),
             Op::CherryPick(s) => format!("Cherry-pick {}", short(s)),
             Op::Revert(s) => format!("Revert {}", short(s)),
             Op::Reset { to, .. } => format!("Reset to {}", short(to)),
@@ -1644,7 +1690,7 @@ impl Op {
             }
             Op::FastForward { local, to } | Op::CheckoutUpdate { local, to } => vec![local, to],
             Op::RenameBranch { old, new } => vec![old, new],
-            Op::PushTag { remote, name } => vec![remote, name],
+            Op::PushTag { remote, name } | Op::UpdateTag { remote, name } => vec![remote, name],
             Op::Reset { to, .. } => vec![to],
             Op::StashPop(Some(s)) | Op::StashApply(s) | Op::StashDrop(s) => vec![s],
             Op::RemoveWorktree { path, branch } => {
@@ -1775,6 +1821,12 @@ impl Op {
             Op::CreateTag { name, at } => g(&["tag", name, at]),
             Op::DeleteTag(t) => g(&["tag", "-d", t]),
             Op::PushTag { remote, name } => net(&["push", remote, &format!("refs/tags/{name}")]),
+            Op::UpdateTag { remote, name } => net(&[
+                "fetch",
+                "--no-tags",
+                remote,
+                &format!("+refs/tags/{name}:refs/tags/{name}"),
+            ]),
             Op::CherryPick(s) => g(&["cherry-pick", s]),
             Op::Revert(s) => g(&["revert", "--no-edit", s]),
             Op::Reset { to, mode } => g(&[
@@ -2148,10 +2200,15 @@ mod tests {
             .unwrap()
             .trim()
             .to_string();
-        assert_eq!(tags.get("v1"), Some(&head), "{tags:?}");
+        let on = |t: &str| tags.get(t).cloned().unwrap_or_default();
         assert_eq!(
-            tags.get("v2"),
-            Some(&head),
+            on("v1"),
+            vec![("origin".to_string(), head.clone())],
+            "{tags:?}"
+        );
+        assert_eq!(
+            on("v2"),
+            vec![("origin".to_string(), head.clone())],
             "annotated tag peeled to its commit"
         );
         assert!(!tags.contains_key("local-only"));

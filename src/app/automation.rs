@@ -159,6 +159,10 @@ impl BranchBlitz {
                             if r.kind == git::RefKind::Tag {
                                 // null = not known yet (no fetch since start).
                                 e["on_remote"] = json!(d.tag_on_remote(r));
+                                if let Some((remote, sha)) = d.tag_moved(r) {
+                                    e["remote_commit"] =
+                                        json!(format!("{remote} {}", git::short(sha)));
+                                }
                             }
                             if let Some(u) = &r.upstream {
                                 e["upstream"] = json!(u);
