@@ -239,6 +239,10 @@ pub fn assign(data: &RepoData, rules: &[ColorRule]) -> Coloring {
     }
 
     for i in 0..commits.len() {
+        // A stash takes its commit's colour (below), it doesn't claim that line.
+        if commits[i].stash.is_some() {
+            continue;
+        }
         if owner[i].is_none() {
             let key = b.unnamed();
             claim(&mut owner, i, key);
@@ -258,6 +262,17 @@ pub fn assign(data: &RepoData, rules: &[ColorRule]) -> Coloring {
         }
     }
 
+    for (i, c) in commits
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.stash.is_some())
+    {
+        owner[i] = c
+            .parents
+            .first()
+            .and_then(|p| index.get(p.as_str()))
+            .and_then(|&p| owner[p]);
+    }
     b.c.commit = owner.into_iter().map(|o| o.unwrap_or(0)).collect();
     b.c
 }
@@ -275,6 +290,7 @@ mod tests {
             time: 0,
             subject: subject.into(),
             body: String::new(),
+            stash: None,
         }
     }
 

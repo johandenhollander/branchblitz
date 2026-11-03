@@ -462,6 +462,21 @@ fn draw_seg(painter: &Painter, from: Pos2, to: Pos2, color: Color32, top_half: b
     ));
 }
 
+/// The ring of a node that is not a commit on a branch: the WIP row and stashes.
+fn dashed_circle(painter: &Painter, c: Pos2, color: Color32) {
+    painter.add(egui::Shape::dashed_line(
+        &(0..=24)
+            .map(|k| {
+                let a = k as f32 / 24.0 * std::f32::consts::TAU;
+                pos2(c.x + NODE_R * a.cos(), c.y + NODE_R * a.sin())
+            })
+            .collect::<Vec<_>>(),
+        Stroke::new(2.0, color),
+        3.0,
+        2.0,
+    ));
+}
+
 fn dashed_v(painter: &Painter, x: f32, y0: f32, y1: f32, color: Color32) {
     let mut y = y0;
     while y < y1 {
@@ -739,7 +754,7 @@ pub fn graph_view(
     }
     ui.spacing_mut().item_spacing.y = 0.0;
     // Near the end of what is loaded, while there may be more: load the next portion.
-    let more = data.commits.len() >= limit.load(std::sync::atomic::Ordering::Relaxed);
+    let more = data.history_len() >= limit.load(std::sync::atomic::Ordering::Relaxed);
     let out = area.show_rows(ui, ROW_H, total, |ui, range| {
         if more && !*loading_more && range.end + 20 >= total {
             *loading_more = true;
@@ -793,17 +808,7 @@ pub fn graph_view(
                     dashed_v(&gpainter, x, yc + NODE_R, rect.bottom(), color);
                 }
                 gpainter.circle_filled(pos2(x, yc), NODE_R, pal.canvas);
-                gpainter.add(egui::Shape::dashed_line(
-                    &(0..=24)
-                        .map(|k| {
-                            let a = k as f32 / 24.0 * std::f32::consts::TAU;
-                            pos2(x + NODE_R * a.cos(), yc + NODE_R * a.sin())
-                        })
-                        .collect::<Vec<_>>(),
-                    Stroke::new(2.0, color),
-                    3.0,
-                    2.0,
-                ));
+                dashed_circle(&gpainter, pos2(x, yc), color);
                 if graph_fit(graph.lanes, cols.lane_w) > cols.graph.1 - cols.graph.0 + 0.5 {
                     fade_right(
                         &painter,
@@ -897,7 +902,7 @@ pub fn graph_view(
             // branch's name field takes their place.
             let node = pos2(lane_x(&cols, g.col), yc);
             let merge = c.parents.len() > 1;
-            let avatar = opts.author_on_node && !merge;
+            let avatar = opts.author_on_node && !merge && c.stash.is_none();
             let node_r = if avatar { AVATAR_R } else { NODE_R };
             let naming = new_branch.as_ref().is_some_and(|b| b.at == c.sha);
             if naming {
@@ -909,6 +914,33 @@ pub fn graph_view(
                 painter.line_segment(
                     [
                         pos2(cols.refs.1 + 2.0, yc),
+                        pos2((node.x - node_r - 3.0).min(cols.graph.1), yc),
+                    ],
+                    Stroke::new(1.0, color.gamma_multiply(0.6)),
+                );
+            } else if let Some(name) = &c.stash {
+                // Not a ref: the stash's name, muted, with the archive icon.
+                let x = cols.refs.0 + 4.0;
+                ds::paint_icon(
+                    &painter,
+                    pos2(x + 6.0, yc),
+                    icons::ARCHIVE,
+                    12.0,
+                    pal.text_subtle,
+                );
+                let g = ds::galley(
+                    &painter,
+                    name,
+                    11.5,
+                    400.0,
+                    pal.text_subtle,
+                    (cols.refs.1 - x - 18.0).max(1.0),
+                );
+                let right = x + 16.0 + g.size().x;
+                painter.galley(pos2(x + 16.0, yc - g.size().y / 2.0), g, pal.text_subtle);
+                painter.line_segment(
+                    [
+                        pos2(right + 4.0, yc),
                         pos2((node.x - node_r - 3.0).min(cols.graph.1), yc),
                     ],
                     Stroke::new(1.0, color.gamma_multiply(0.6)),
@@ -1041,7 +1073,10 @@ pub fn graph_view(
             // Node: filled dot (or the author's initials), hollow for merges, an extra ring for
             // HEAD. Clipped to the graph column, which the user can make narrower than the lanes.
             let is_head = data.head_sha.as_deref() == Some(c.sha.as_str());
-            if merge {
+            if c.stash.is_some() {
+                gpainter.circle_filled(node, NODE_R, pal.canvas);
+                dashed_circle(&gpainter, node, color);
+            } else if merge {
                 gpainter.circle_filled(node, NODE_R - 0.5, pal.canvas);
                 gpainter.circle_stroke(node, NODE_R - 0.5, Stroke::new(2.0, color));
             } else if avatar {
@@ -1073,8 +1108,9 @@ pub fn graph_view(
             }
 
             // Message: ticket key in 550; merges in `text-muted`; the body after it, subtle.
-            let subject_color = if merge { pal.text_muted } else { pal.text };
-            let key = if merge { 0 } else { ticket_key_len(&c.subject) };
+            let quiet = merge || c.stash.is_some();
+            let subject_color = if quiet { pal.text_muted } else { pal.text };
+            let key = if quiet { 0 } else { ticket_key_len(&c.subject) };
             let mut job = LayoutJob::default();
             for (part, weight) in [(&c.subject[..key], 550.0), (&c.subject[key..], 400.0)] {
                 if !part.is_empty() {
@@ -1138,6 +1174,10 @@ pub fn graph_view(
             });
             if resp.clicked() {
                 acts.push(Action::Select(Selection::Commit(c.sha.clone())));
+            }
+            if let Some(name) = &c.stash {
+                resp.context_menu(|ui| stash_menu(ui, pal, name, &c.subject, acts));
+                continue;
             }
             resp.context_menu(|ui| commit_menu(ui, pal, &c.sha, &c.subject, data, acts));
             dnd::source(&resp, || dnd::Drag::Commit {

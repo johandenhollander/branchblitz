@@ -36,7 +36,7 @@ mod sidebar;
 use conflict_view::conflict_view;
 use diff::pill;
 use graph::{pill_lane, pill_menu, pills_for};
-use menus::commit_menu;
+use menus::{commit_menu, stash_menu};
 use sidebar::checkout_item;
 
 pub use agent_panel::{AGENT_BAR_H, AgentChoice, agent_bar, agent_panel, agent_splitter};

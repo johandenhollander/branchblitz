@@ -390,28 +390,7 @@ fn stash_row(ui: &mut Ui, pal: &Palette, s: &git::Stash, acts: &mut Vec<Action>)
         g,
         pal.text,
     );
-    resp.context_menu(|ui| {
-        ui.set_width(260.0);
-        ds::menu_title(ui, pal, &s.name, None);
-        if ds::menu_item(ui, pal, icons::ARCHIVE_RESTORE, "Apply", None, false).clicked() {
-            acts.push(Action::Op(Op::StashApply(s.name.clone())));
-            ui.close();
-        }
-        if ds::menu_item(ui, pal, icons::ARCHIVE_RESTORE, "Pop", None, false).clicked() {
-            acts.push(Action::Op(Op::StashPop(Some(s.name.clone()))));
-            ui.close();
-        }
-        ds::menu_divider(ui, pal);
-        if ds::menu_item(ui, pal, icons::TRASH_2, "Drop", None, true).clicked() {
-            acts.push(Action::Confirm {
-                title: format!("Drop {}?", s.name),
-                body: format!("The stash \"{}\" will be deleted.", s.message),
-                op: Op::StashDrop(s.name.clone()),
-                danger: true,
-            });
-            ui.close();
-        }
-    });
+    resp.context_menu(|ui| stash_menu(ui, pal, &s.name, &s.message, acts));
 }
 
 /// A folder (branch prefix or remote) that opens and closes; returns whether it is open.

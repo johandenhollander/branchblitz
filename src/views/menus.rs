@@ -589,3 +589,33 @@ pub(super) fn commit_menu(
         },
     );
 }
+
+/// Apply, pop or drop stash `name` (sidebar row and graph row).
+pub(super) fn stash_menu(
+    ui: &mut Ui,
+    pal: &Palette,
+    name: &str,
+    message: &str,
+    acts: &mut Vec<Action>,
+) {
+    ui.set_width(260.0);
+    ds::menu_title(ui, pal, name, None);
+    if ds::menu_item(ui, pal, icons::ARCHIVE_RESTORE, "Apply", None, false).clicked() {
+        acts.push(Action::Op(Op::StashApply(name.to_string())));
+        ui.close();
+    }
+    if ds::menu_item(ui, pal, icons::ARCHIVE_RESTORE, "Pop", None, false).clicked() {
+        acts.push(Action::Op(Op::StashPop(Some(name.to_string()))));
+        ui.close();
+    }
+    ds::menu_divider(ui, pal);
+    if ds::menu_item(ui, pal, icons::TRASH_2, "Drop", None, true).clicked() {
+        acts.push(Action::Confirm {
+            title: format!("Drop {name}?"),
+            body: format!("The stash \"{message}\" will be deleted."),
+            op: Op::StashDrop(name.to_string()),
+            danger: true,
+        });
+        ui.close();
+    }
+}

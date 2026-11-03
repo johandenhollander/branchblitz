@@ -193,6 +193,7 @@ mod tests {
             time: 0,
             subject: String::new(),
             body: String::new(),
+            stash: None,
         }
     }
 

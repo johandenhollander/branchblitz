@@ -62,7 +62,7 @@ impl BranchBlitz {
                     // A load that started before the limit grew: the larger one is still coming.
                     let outdated = data.limit < tab.limit.load(Ordering::Relaxed);
                     tab.loading_more = outdated;
-                    let loaded_all = data.commits.len() < data.limit;
+                    let loaded_all = data.history_len() < data.limit;
                     let dirty = data.status.is_dirty() || data.state != RepoState::Clean;
                     tab.data = Some(data);
                     if tab.selected == Selection::Wip && !dirty {
@@ -83,6 +83,35 @@ impl BranchBlitz {
                     {
                         tab.diff = None;
                         tab.conflict_choices.clear();
+                    }
+                    // A staged or unstaged file that moved to the other list (staged, unstaged)
+                    // follows it; one that is gone (committed, discarded) leaves the diff, since
+                    // an empty diff is no use.
+                    if let (Some((t, _)), Some(d)) = (&tab.diff, &tab.data) {
+                        let find = |list: &[git::FileChange], p: &str| {
+                            list.iter().find(|f| f.path == p).map(|f| f.status)
+                        };
+                        let (staged, unstaged) = (&d.status.staged, &d.status.unstaged);
+                        let next = match t {
+                            DiffTarget::Staged { path } if find(staged, path).is_none() => {
+                                Some(find(unstaged, path).map(|s| DiffTarget::Unstaged {
+                                    path: path.clone(),
+                                    untracked: s == '?',
+                                }))
+                            }
+                            DiffTarget::Unstaged { path, .. } if find(unstaged, path).is_none() => {
+                                Some(
+                                    find(staged, path)
+                                        .map(|_| DiffTarget::Staged { path: path.clone() }),
+                                )
+                            }
+                            _ => None,
+                        };
+                        if let Some(next) = next {
+                            tab.diff = next.map(|t| (t, None));
+                            tab.diff_selection.clear();
+                            tab.diff_anchor = None;
+                        }
                     }
                     let refresh = match &tab.diff {
                         Some((

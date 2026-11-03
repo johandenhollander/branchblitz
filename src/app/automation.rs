@@ -191,7 +191,7 @@ impl BranchBlitz {
                 v["staged"] = json!(files(&d.status.staged));
                 v["unstaged"] = json!(files(&d.status.unstaged));
                 v["conflicted"] = json!(d.status.conflicted);
-                v["commits_loaded"] = json!(d.commits.len());
+                v["commits_loaded"] = json!(d.history_len());
                 v["commits"] = json!(
                     d.commits
                         .iter()

@@ -1133,6 +1133,64 @@ mod tests {
         assert!(!t.commit_no_verify && t.commit_args.is_empty());
     }
 
+    /// The open diff follows its file when it is staged, closes when the file is committed, and a
+    /// checkout that local changes would block stashes them; the stash shows in the graph.
+    #[test]
+    fn diff_follows_staging_and_checkout_autostashes() {
+        let mut s = Server::default();
+        call(&mut s, "demo_repo", json!({}));
+        call(&mut s, "wait_idle", json!({}));
+        let dir = s.demo_dirs[0].join("work");
+        let diff = |s: &mut Server| {
+            call(s, "wait_idle", json!({}));
+            let state: Value =
+                serde_json::from_str(&call(s, "state", json!({"commits": 0})).1).unwrap();
+            state["tabs"][0]["diff_open"].clone()
+        };
+        call(&mut s, "click", json!({"label": "WIP"}));
+        let (err, out) = call(&mut s, "click", json!({"label": "new.txt"}));
+        assert!(!err, "{out}");
+        assert!(
+            diff(&mut s).to_string().contains("Unstaged"),
+            "{}",
+            diff(&mut s)
+        );
+        crate::git::git(&dir, &["add", "new.txt"]).unwrap();
+        let t = std::time::Instant::now();
+        while !diff(&mut s).to_string().contains("Staged") {
+            assert!(t.elapsed().as_secs() < 5, "{}", diff(&mut s));
+        }
+        let h = s.session.as_mut().unwrap();
+        h.state_mut().tabs_mut()[0].commit_msg = "Add new".into();
+        h.step();
+        let (err, out) = call(&mut s, "click", json!({"label": "Commit 1 file"}));
+        assert!(!err, "{out}");
+        assert_eq!(diff(&mut s), Value::Null, "no empty diff after the commit");
+
+        // new.txt, just committed here, is changed again; develop doesn't have it, so switching
+        // would overwrite the change: it is stashed.
+        std::fs::write(dir.join("new.txt"), "changed\n").unwrap();
+        let (err, out) = call(
+            &mut s,
+            "click",
+            json!({"label": "develop", "double": true, "nth": 0}),
+        );
+        assert!(!err, "{out}");
+        call(&mut s, "wait_idle", json!({}));
+        let head = crate::git::git(&dir, &["symbolic-ref", "--short", "HEAD"]).unwrap();
+        assert_eq!(head.trim(), "develop");
+        let list = crate::git::git(&dir, &["stash", "list"]).unwrap();
+        assert!(
+            list.contains("autostash before switching to develop"),
+            "{list}"
+        );
+        let (_, w) = call(&mut s, "widgets", json!({}));
+        assert!(
+            w.contains("autostash before switching to develop"),
+            "stash row in the graph: {w}"
+        );
+    }
+
     /// A file staged or a branch made in a terminal shows up without F5 or a focus change, and a
     /// description alone (no summary) is enough to commit.
     #[test]

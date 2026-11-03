@@ -95,6 +95,20 @@ pub fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
     result(output(repo, args)?)
 }
 
+/// `git stash push --include-untracked` without literal pathspecs: git cleans the stashed
+/// untracked files with the pathspec `:/`, which taken literally matches nothing, so they would
+/// stay behind (and block the pop later). No paths of ours are passed here.
+fn stash_push(repo: &Path, extra: &[&str]) -> Result<String, String> {
+    let mut cmd = command(repo);
+    cmd.env("GIT_LITERAL_PATHSPECS", "0")
+        .args(["stash", "push", "--include-untracked"])
+        .args(extra);
+    result(
+        cmd.output()
+            .map_err(|e| format!("Could not start git: {e}"))?,
+    )
+}
+
 fn git_network(repo: &Path, args: &[&str]) -> Result<String, String> {
     result(output_timeout(repo, args, NETWORK_TIMEOUT)?)
 }
@@ -282,6 +296,8 @@ pub struct Commit {
     pub subject: String,
     /// The message body on one line ("a | b"), shortened: a preview next to the subject.
     pub body: String,
+    /// A stash shown in the graph (`stash@{0}`); its only parent is the commit it was made on.
+    pub stash: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -648,24 +664,52 @@ pub fn load(repo: &Path, limit: usize) -> Result<RepoData, String> {
 
     let (refs, default_branches) = load_refs(repo, &remotes)?;
     let flow = load_flow(repo);
-    let commits = if refs.is_empty() && head_sha.is_none() {
+    let mut commits = if refs.is_empty() && head_sha.is_none() {
         Vec::new()
     } else {
         load_commits(repo, limit, head_sha.is_some())?
     };
     let status = load_status(repo)?;
     let state = load_state(repo);
-    let stashes = git(repo, &["stash", "list", "--format=%gd%x1f%s"])
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|l| {
-            let (name, message) = l.split_once('\x1f')?;
-            Some(Stash {
-                name: name.to_string(),
-                message: message.to_string(),
-            })
+    let stash_commits: Vec<Commit> = git(
+        repo,
+        &[
+            "stash",
+            "list",
+            "--format=%gd%x1f%H%x1f%P%x1f%an%x1f%ct%x1f%s",
+        ],
+    )
+    .unwrap_or_default()
+    .lines()
+    .filter_map(|l| {
+        let f: Vec<&str> = l.splitn(6, '\x1f').collect();
+        let [name, sha, parents, author, time, subject] = f[..] else {
+            return None;
+        };
+        Some(Commit {
+            sha: sha.to_string(),
+            // The index and untracked-files commits are git's bookkeeping, not history.
+            parents: parents
+                .split_whitespace()
+                .take(1)
+                .map(String::from)
+                .collect(),
+            author: author.to_string(),
+            time: time.parse().unwrap_or(0),
+            subject: subject.to_string(),
+            body: String::new(),
+            stash: Some(name.to_string()),
+        })
+    })
+    .collect();
+    let stashes = stash_commits
+        .iter()
+        .map(|c| Stash {
+            name: c.stash.clone().unwrap_or_default(),
+            message: c.subject.clone(),
         })
         .collect();
+    commits = with_stashes(commits, stash_commits);
 
     let head_history = history(&commits, head_sha.as_deref());
     let worktrees = parse_worktrees(
@@ -771,6 +815,11 @@ pub fn remote_tags(repo: &Path, remotes: &[String]) -> Result<RemoteTags, String
 }
 
 impl RepoData {
+    /// How many commits of history are loaded (stash rows not counted), to compare with `limit`.
+    pub fn history_len(&self) -> usize {
+        self.commits.iter().filter(|c| c.stash.is_none()).count()
+    }
+
     /// Whether tag `r` is on a remote, at the same commit. `None` if that is not known yet.
     pub fn tag_on_remote(&self, r: &RefInfo) -> Option<bool> {
         self.remote_tags.as_ref().map(|t| {
@@ -1109,9 +1158,77 @@ fn load_commits(repo: &Path, limit: usize, has_head: bool) -> Result<Vec<Commit>
                 time: f[3].parse().unwrap_or(0),
                 subject: f[4].to_string(),
                 body: body_preview(f[5]),
+                stash: None,
             })
         })
         .collect())
+}
+
+/// `git switch` (`args`) to `to`; when local changes are in the way, they are stashed first (they
+/// show in the graph and the sidebar) and the switch is tried again. If it still fails, the
+/// changes are put back.
+fn switch_autostash(repo: &Path, args: &[&str], to: &str) -> Result<String, String> {
+    let err = match git(repo, args) {
+        Ok(out) => return Ok(out),
+        Err(e) if e.contains("would be overwritten by checkout") => e,
+        Err(e) => return Err(e),
+    };
+    let message = format!("autostash before switching to {to}");
+    let top = || git(repo, &["rev-parse", "-q", "--verify", "refs/stash"]).unwrap_or_default();
+    let before = top();
+    stash_push(repo, &["-m", &message])
+        .map_err(|e| format!("{err}\nStashing the changes failed too: {e}"))?;
+    // Nothing stashed (what is in the way is not something a stash takes): leave the user's
+    // own stashes alone.
+    if top() == before {
+        return Err(err);
+    }
+    match git(repo, args) {
+        Ok(out) => Ok(format!(
+            "Your changes were in the way; stashed them as stash@{{0}} ({message})\n{out}"
+        )),
+        Err(e) => match git(repo, &["stash", "pop"]) {
+            Ok(_) => Err(e),
+            Err(pop) => Err(format!(
+                "{e}\nYour changes are kept in stash@{{0}}; putting them back failed: {pop}"
+            )),
+        },
+    }
+}
+
+/// `commits` (date order) with each stash right above the newest commit older than it, and never
+/// below the commit it was made on. A stash whose commit is not loaded is left out.
+fn with_stashes(commits: Vec<Commit>, stashes: Vec<Commit>) -> Vec<Commit> {
+    if stashes.is_empty() {
+        return commits;
+    }
+    let index: HashMap<&str, usize> = commits
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.sha.as_str(), i))
+        .collect();
+    let mut at: Vec<(usize, Commit)> = stashes
+        .into_iter()
+        .filter_map(|s| {
+            let base = *index.get(s.parents.first()?.as_str())?;
+            let by_time = commits[..base]
+                .iter()
+                .position(|c| c.time < s.time)
+                .unwrap_or(base);
+            Some((by_time, s))
+        })
+        .collect();
+    // Stable: at the same spot the newer stash (listed first) stays on top.
+    at.sort_by_key(|(i, _)| *i);
+    let mut out = Vec::with_capacity(commits.len() + at.len());
+    let mut at = at.into_iter().peekable();
+    for (i, c) in commits.into_iter().enumerate() {
+        while let Some((_, s)) = at.next_if(|(p, _)| *p == i) {
+            out.push(s);
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// The body's non-empty lines joined with " | ", at most 200 characters; trailers such as
@@ -1778,16 +1895,16 @@ impl Op {
                 }
                 net(&args)
             }
-            Op::Checkout(b) => g(&["switch", b]),
+            Op::Checkout(b) => switch_autostash(repo, &["switch", b], b),
             Op::CheckoutRemote { remote_ref, local } => {
-                g(&["switch", "-c", local, "--track", remote_ref])
+                switch_autostash(repo, &["switch", "-c", local, "--track", remote_ref], local)
             }
-            Op::CheckoutCommit(s) => g(&["switch", "--detach", s]),
+            Op::CheckoutCommit(s) => switch_autostash(repo, &["switch", "--detach", s], short(s)),
             Op::CheckoutUpdate { local, to } => {
                 let head = g(&["symbolic-ref", "-q", "--short", "HEAD"]).unwrap_or_default();
                 let mut out = String::new();
                 if head.trim() != local {
-                    out += &g(&["switch", local])?;
+                    out += &switch_autostash(repo, &["switch", local], local)?;
                 }
                 let ancestor = |a: &str, b: &str| g(&["merge-base", "--is-ancestor", a, b]).is_ok();
                 let branch = format!("refs/heads/{local}");
@@ -1842,7 +1959,7 @@ impl Op {
                 },
                 to,
             ]),
-            Op::Stash => g(&["stash", "push", "--include-untracked"]),
+            Op::Stash => stash_push(repo, &[]),
             Op::StashPop(None) => g(&["stash", "pop"]),
             Op::StashPop(Some(s)) => g(&["stash", "pop", s]),
             Op::StashApply(s) => g(&["stash", "apply", s]),
@@ -2213,6 +2330,97 @@ mod tests {
         git(&dir, &["add", "a.txt"]).unwrap();
         git(&dir, &["commit", "-qm", "first"]).unwrap();
         dir
+    }
+
+    fn commit_at(sha: &str, parents: &[&str], time: i64) -> Commit {
+        Commit {
+            sha: sha.into(),
+            parents: parents.iter().map(|s| s.to_string()).collect(),
+            author: String::new(),
+            time,
+            subject: String::new(),
+            body: String::new(),
+            stash: None,
+        }
+    }
+
+    #[test]
+    fn stashes_sit_by_date_above_their_commit() {
+        let commits = vec![
+            commit_at("d", &["c"], 40),
+            commit_at("c", &["b"], 30),
+            commit_at("b", &["a"], 20),
+            commit_at("a", &[], 10),
+        ];
+        let stash = |name: &str, base: &str, time| Commit {
+            stash: Some(name.into()),
+            ..commit_at(name, &[base], time)
+        };
+        let rows: Vec<String> = with_stashes(
+            commits,
+            vec![
+                stash("s0", "b", 35), // newer than c: above c
+                stash("s1", "a", 25), // made on a, older than c: above b
+                stash("s2", "c", 5),  // clock skew: never below its commit
+                stash("s3", "gone", 50),
+            ],
+        )
+        .into_iter()
+        .map(|c| c.sha)
+        .collect();
+        assert_eq!(rows, ["d", "s0", "s2", "c", "s1", "b", "a"]);
+    }
+
+    /// Local changes that block a checkout are stashed (and shown in the graph); changes that
+    /// don't get in the way simply come along.
+    #[test]
+    fn checkout_stashes_changes_in_the_way() {
+        let dir = repo("autostash");
+        git(&dir, &["branch", "other"]).unwrap();
+        std::fs::write(dir.join("a.txt"), "main\n").unwrap();
+        git(&dir, &["commit", "-qam", "change a"]).unwrap();
+        let base = git(&dir, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+
+        std::fs::write(dir.join("a.txt"), "dirty\n").unwrap();
+        std::fs::write(dir.join("new.txt"), "untracked\n").unwrap();
+        let out = Op::Checkout("other".into()).run(&dir, None).unwrap();
+        assert!(
+            out.starts_with("Your changes were in the way; stashed them"),
+            "{out}"
+        );
+        let head = git(&dir, &["symbolic-ref", "--short", "HEAD"]).unwrap();
+        assert_eq!(head.trim(), "other");
+        assert!(!dir.join("new.txt").exists(), "untracked files stashed too");
+        let d = load(&dir, 100).unwrap();
+        assert_eq!(d.stashes.len(), 1);
+        assert!(
+            d.stashes[0]
+                .message
+                .contains("autostash before switching to other")
+        );
+        let row = d.commits.iter().find(|c| c.stash.is_some()).unwrap();
+        assert_eq!(row.stash.as_deref(), Some("stash@{0}"));
+        assert_eq!(row.parents, [base], "only the commit it was made on");
+        assert_eq!(d.history_len(), d.commits.len() - 1);
+
+        // Not in the way: no stash, the change comes along.
+        std::fs::write(dir.join("new.txt"), "x\n").unwrap();
+        let out = Op::Checkout("main".into()).run(&dir, None);
+        let out = out
+            .or_else(|_| Op::Checkout("master".into()).run(&dir, None))
+            .unwrap();
+        assert!(!out.contains("stashed"), "{out}");
+        assert_eq!(load(&dir, 100).unwrap().stashes.len(), 1);
+        assert!(dir.join("new.txt").exists());
+
+        // The Stash button takes untracked files out of the working tree as well.
+        Op::Stash.run(&dir, None).unwrap();
+        assert!(!dir.join("new.txt").exists());
+        Op::StashPop(None).run(&dir, None).unwrap();
+        assert!(dir.join("new.txt").exists());
     }
 
     #[test]

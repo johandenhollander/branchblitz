@@ -195,10 +195,11 @@ impl BranchBlitz {
             }
         };
         // A loaded commit, by (a prefix of) its hash: the agent can't slip in rev expressions.
+        // Not a stash row: those are git's bookkeeping merges, not commits to pick or reset to.
         let commit = |sha: &str| {
             data.commits
                 .iter()
-                .find(|c| !sha.is_empty() && c.sha.starts_with(sha))
+                .find(|c| c.stash.is_none() && !sha.is_empty() && c.sha.starts_with(sha))
                 .ok_or_else(|| format!("No loaded commit {sha}"))
         };
         match tool {

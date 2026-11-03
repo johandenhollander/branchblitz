@@ -174,16 +174,27 @@ fn commit_meta(
                 }
             });
             ui.end_row();
+            // A stash's other parents are git's index and untracked-files commits, not rows.
+            let stash = tab
+                .row_of
+                .get(d.sha.as_str())
+                .and_then(|&i| tab.data.as_ref()?.commits.get(i))
+                .is_some_and(|c| c.stash.is_some());
+            let parents = if stash {
+                &d.parents[..d.parents.len().min(1)]
+            } else {
+                &d.parents[..]
+            };
             dt(
                 ui,
-                if d.parents.len() > 1 {
+                if parents.len() > 1 {
                     "Parents"
                 } else {
                     "Parent"
                 },
             );
             ui.horizontal(|ui| {
-                for p in &d.parents {
+                for p in parents {
                     let link = ui
                         .add(
                             egui::Label::new(
