@@ -1073,6 +1073,66 @@ mod tests {
         assert!(t.commit_msg.is_empty() && t.commit_body.is_empty());
     }
 
+    /// Commit options sit folded under the message; skipping hooks gets a commit past a
+    /// commit-msg hook that rejects it, and the options reset afterwards.
+    #[cfg(unix)]
+    #[test]
+    fn commit_options_skip_hooks() {
+        let mut s = Server::default();
+        call(&mut s, "demo_repo", json!({}));
+        call(&mut s, "wait_idle", json!({}));
+        let dir = s.demo_dirs[0].join("work");
+        let hook = dir.join(".git/hooks/commit-msg");
+        std::fs::write(&hook, "#!/bin/sh\necho 'Rule not matched' >&2\nexit 1\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::fs::write(dir.join("hooked.txt"), "x\n").unwrap();
+        crate::git::git(&dir, &["add", "hooked.txt"]).unwrap();
+        call(&mut s, "click", json!({"label": "WIP"}));
+        let (_, w) = call(&mut s, "widgets", json!({}));
+        assert!(!w.contains("Skip git hooks"), "options start folded: {w}");
+        let (err, out) = call(&mut s, "click", json!({"label": "Options"}));
+        assert!(!err, "{out}");
+        let (err, out) = call(
+            &mut s,
+            "click",
+            json!({"label": "Skip git hooks (--no-verify)"}),
+        );
+        assert!(!err, "{out}");
+        let h = s.session.as_mut().unwrap();
+        h.state_mut().tabs_mut()[0].commit_msg = "Test".into();
+        h.state_mut().tabs_mut()[0].commit_args = "--signoff".into();
+        let t = std::time::Instant::now();
+        loop {
+            h.step();
+            if h.state_mut().tabs_mut()[0]
+                .data
+                .as_ref()
+                .is_some_and(|d| d.status.staged.iter().any(|f| f.path == "hooked.txt"))
+            {
+                break;
+            }
+            assert!(t.elapsed().as_secs() < 5, "stage not noticed");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let (_, w) = call(&mut s, "widgets", json!({"role": "Button"}));
+        let label = w
+            .lines()
+            .find(|l| l.contains("Commit ") && l.contains(" file"))
+            .and_then(|l| l.split('"').nth(1))
+            .unwrap_or_else(|| panic!("{w}"))
+            .to_string();
+        let (err, out) = call(&mut s, "click", json!({ "label": label }));
+        assert!(!err, "{out}");
+        call(&mut s, "wait_idle", json!({}));
+        let head = crate::git::git(&dir, &["log", "-1", "--format=%B"]).unwrap();
+        assert!(head.starts_with("Test\n\nSigned-off-by:"), "{head}");
+        let t = &s.session.as_mut().unwrap().state_mut().tabs_mut()[0];
+        assert!(!t.commit_no_verify && t.commit_args.is_empty());
+    }
+
     /// A file staged or a branch made in a terminal shows up without F5 or a focus change, and a
     /// description alone (no summary) is enough to commit.
     #[test]

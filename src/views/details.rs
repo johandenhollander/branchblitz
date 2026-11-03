@@ -319,8 +319,13 @@ fn wip_panel(
     ui.painter()
         .hline(line.x_range(), line.top(), Stroke::new(1.0, pal.border));
 
-    // The commit area is pinned to the bottom; the files scroll above it.
-    let foot_h = 214.0;
+    // The commit area is pinned to the bottom; the files scroll above it. Its height (taller
+    // with the options open) is measured and kept for the next frame.
+    let foot_id = id.with("commit-foot");
+    let foot_h = ui
+        .ctx()
+        .data(|d| d.get_temp::<f32>(foot_id))
+        .unwrap_or(214.0);
     let avail = ui.available_height();
     egui::ScrollArea::vertical()
         .max_height((avail - foot_h).max(80.0))
@@ -408,7 +413,14 @@ fn wip_panel(
                 });
         });
 
+    let top = ui.cursor().top();
     commit_area(ui, tab, pal, acts);
+    let h = ui.min_rect().bottom() - top;
+    if (h - foot_h).abs() > 0.5 {
+        ui.ctx().data_mut(|d| d.insert_temp(foot_id, h));
+        // Lay out again before showing, so a toggled Options never clips the button.
+        ui.ctx().request_discard("commit area height");
+    }
 }
 
 /// The confirmation for "Discard all changes…", naming the first files.
@@ -737,6 +749,30 @@ fn commit_area(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<Act
                     );
                 });
             });
+            // Rarely needed, so folded away; the count says something is set while closed.
+            let set =
+                usize::from(tab.commit_no_verify) + usize::from(!tab.commit_args.trim().is_empty());
+            let open = ds::section_header(
+                ui,
+                pal,
+                ui.scope_id().with("commit-options"),
+                "Options",
+                (set > 0).then_some(set),
+                false,
+                false,
+            );
+            if open {
+                ui.checkbox(&mut tab.commit_no_verify, "Skip git hooks (--no-verify)")
+                    .on_hover_text("Commit without running the pre-commit and commit-msg hooks");
+                let args = egui::TextEdit::singleline(&mut tab.commit_args)
+                    .hint_text(
+                        RichText::new("More git commit arguments, e.g. --signoff")
+                            .color(pal.text_subtle),
+                    )
+                    .desired_width(f32::INFINITY);
+                ui.add(args)
+                    .on_hover_text("Added to git commit as typed; quotes keep spaces together");
+            }
             // Either field will do: some people only write the description.
             let has_message =
                 !tab.commit_msg.trim().is_empty() || !tab.commit_body.trim().is_empty();
@@ -765,6 +801,8 @@ fn commit_area(ui: &mut Ui, tab: &mut RepoTab, pal: &Palette, acts: &mut Vec<Act
                 acts.push(Action::Op(Op::Commit {
                     message: commit_message(&tab.commit_msg, &tab.commit_body),
                     amend: tab.amend,
+                    no_verify: tab.commit_no_verify,
+                    extra: crate::git::split_args(&tab.commit_args),
                 }));
             }
         });

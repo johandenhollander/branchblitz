@@ -415,6 +415,8 @@ impl BranchBlitz {
                                 Op::Commit {
                                     message,
                                     amend: true,
+                                    no_verify: false,
+                                    extra: Vec::new(),
                                 },
                             );
                         }
@@ -423,6 +425,8 @@ impl BranchBlitz {
                             Op::Commit {
                                 message,
                                 amend: false,
+                                no_verify: false,
+                                extra: Vec::new(),
                             },
                         )
                     }

@@ -1555,6 +1555,10 @@ pub enum Op {
     Commit {
         message: String,
         amend: bool,
+        /// `--no-verify`: skip the pre-commit and commit-msg hooks.
+        no_verify: bool,
+        /// More arguments for `git commit`, typed by the user (see [`split_args`]).
+        extra: Vec<String>,
     },
     MarkResolved(String),
     TakeSide {
@@ -1903,11 +1907,20 @@ impl Op {
                 }
                 g(&["reset", "--hard", "-q", "HEAD"]).and_then(|_| g(&["clean", "-fdq"]))
             }
-            Op::Commit { message, amend } => {
+            Op::Commit {
+                message,
+                amend,
+                no_verify,
+                extra,
+            } => {
                 let mut args = vec!["commit", "-m", message.as_str()];
                 if *amend {
                     args.push("--amend");
                 }
+                if *no_verify {
+                    args.push("--no-verify");
+                }
+                args.extend(extra.iter().map(String::as_str));
                 g(&args)
             }
             Op::MarkResolved(p) => g(&["add", "--", p]),
@@ -2149,6 +2162,28 @@ pub fn refs_by_commit(refs: &[RefInfo]) -> HashMap<String, Vec<usize>> {
     map
 }
 
+/// Splits typed command-line arguments on whitespace; single or double quotes keep spaces
+/// together (`--author="A B <a@b>"` is one argument). An unclosed quote runs to the end.
+pub fn split_args(s: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut cur: Option<String> = None;
+    let mut quote = None;
+    for c in s.chars() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), c) => cur.get_or_insert_default().push(c),
+            (None, '"' | '\'') => {
+                quote = Some(c);
+                cur.get_or_insert_default();
+            }
+            (None, c) if c.is_whitespace() => args.extend(cur.take()),
+            (None, c) => cur.get_or_insert_default().push(c),
+        }
+    }
+    args.extend(cur);
+    args
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2178,6 +2213,48 @@ mod tests {
         git(&dir, &["add", "a.txt"]).unwrap();
         git(&dir, &["commit", "-qm", "first"]).unwrap();
         dir
+    }
+
+    #[test]
+    fn splits_typed_arguments() {
+        assert_eq!(split_args("  -n   --signoff "), ["-n", "--signoff"]);
+        assert_eq!(
+            split_args(r#"--author="A B <a@b>" -m 'x y'"#),
+            ["--author=A B <a@b>", "-m", "x y"]
+        );
+        assert_eq!(split_args(r#"--x="" 'open"#), ["--x=", "open"]);
+        assert!(split_args("   ").is_empty());
+    }
+
+    /// A failing commit-msg hook stops the commit; skipping hooks and extra arguments get it in.
+    #[cfg(unix)]
+    #[test]
+    fn commit_can_skip_hooks_and_take_arguments() {
+        let dir = repo("nohooks");
+        let hook = dir.join(".git/hooks/commit-msg");
+        std::fs::write(
+            &hook,
+            "#!/bin/sh\necho 'Must contain issue number' >&2\nexit 1\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(dir.join("b.txt"), "b\n").unwrap();
+        git(&dir, &["add", "b.txt"]).unwrap();
+        let commit = |no_verify, extra: &str| {
+            Op::Commit {
+                message: "Test".into(),
+                amend: false,
+                no_verify,
+                extra: split_args(extra),
+            }
+            .run(&dir, None)
+        };
+        let err = commit(false, "").unwrap_err();
+        assert!(err.contains("Must contain issue number"), "{err}");
+        commit(true, r#"--author="Other Person <o@example.com>""#).unwrap();
+        let head = git(&dir, &["log", "-1", "--format=%s|%an"]).unwrap();
+        assert_eq!(head.trim(), "Test|Other Person");
     }
 
     #[test]

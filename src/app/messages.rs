@@ -130,6 +130,8 @@ impl BranchBlitz {
                                 tab.commit_msg.clear();
                                 tab.commit_body.clear();
                                 tab.amend = false;
+                                tab.commit_no_verify = false;
+                                tab.commit_args.clear();
                                 tab.amend_prefill = None;
                             }
                             let first = out

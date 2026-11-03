@@ -263,6 +263,10 @@ pub struct RepoTab {
     pub commit_msg: String,
     pub commit_body: String,
     pub amend: bool,
+    /// Commit options (collapsed under the message): skip hooks, more `git commit` arguments.
+    /// Reset after each commit, like Amend.
+    pub commit_no_verify: bool,
+    pub commit_args: String,
     /// Summary and description filled in from HEAD for an amend; cleared again on un-amend
     /// when left unchanged.
     amend_prefill: Option<(String, String)>,
@@ -553,6 +557,8 @@ impl BranchBlitz {
             commit_msg: String::new(),
             commit_body: String::new(),
             amend: false,
+            commit_no_verify: false,
+            commit_args: String::new(),
             amend_prefill: None,
             ref_col_w: saved.map_or(200.0, |c| c.refs),
             graph_col_w: saved.and_then(|c| c.graph),
