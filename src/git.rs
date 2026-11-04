@@ -1734,6 +1734,20 @@ pub enum Op {
 }
 
 impl Op {
+    /// Whether a success leaves a new commit at HEAD (a commit, merge, cherry-pick, ...).
+    pub fn makes_commit(&self) -> bool {
+        match self {
+            Op::Commit { .. }
+            | Op::Merge { .. }
+            | Op::CherryPick(_)
+            | Op::Revert(_)
+            | Op::ContinueMerge
+            | Op::ContinueRebase => true,
+            Op::Onto { then, .. } => then.makes_commit(),
+            _ => false,
+        }
+    }
+
     pub fn label(&self) -> String {
         match self {
             Op::Fetch => "Fetch".into(),

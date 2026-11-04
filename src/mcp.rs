@@ -1163,9 +1163,43 @@ mod tests {
         let h = s.session.as_mut().unwrap();
         h.state_mut().tabs_mut()[0].commit_msg = "Add new".into();
         h.step();
-        let (err, out) = call(&mut s, "click", json!({"label": "Commit 1 file"}));
-        assert!(!err, "{out}");
+        // Clicked by hand: the flash of the new commit is over before `click` would return.
+        egui_kittest::kittest::Queryable::get_by_label(&*h, "Commit 1 file").click();
+        let t = std::time::Instant::now();
+        let flashed = loop {
+            h.step();
+            if let Some((sha, _)) = &h.state_mut().tabs_mut()[0].flash {
+                break sha.clone();
+            }
+            assert!(t.elapsed().as_secs() < 5, "the new commit did not flash");
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        };
+        let head = crate::git::git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        assert_eq!(flashed, head.trim(), "the new commit flashes");
         assert_eq!(diff(&mut s), Value::Null, "no empty diff after the commit");
+        let h = s.session.as_mut().unwrap();
+        // And ends, so an idle window stops drawing again.
+        let mut steps = 0;
+        while h.state_mut().tabs_mut()[0].flash.is_some() {
+            assert!(steps < 500, "the flash ends");
+            h.step();
+            steps += 1;
+        }
+        // A squash merge leaves HEAD where it was: nothing new to flash.
+        h.state_mut().apply(
+            0,
+            vec![crate::app::Action::Op(crate::git::Op::Merge {
+                what: "origin/develop".into(),
+                mode: crate::git::MergeMode::Squash,
+            })],
+        );
+        call(&mut s, "wait_idle", json!({}));
+        let h = s.session.as_mut().unwrap();
+        assert!(
+            h.state_mut().tabs_mut()[0].flash.is_none(),
+            "a squash merge does not flash"
+        );
+        crate::git::git(&dir, &["reset", "--hard", "-q", "HEAD"]).unwrap();
 
         // new.txt, just committed here, is changed again; develop doesn't have it, so switching
         // would overwrite the change: it is stashed.

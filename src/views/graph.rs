@@ -38,6 +38,10 @@ pub struct GraphOpts {
 /// Lane distance and dot radius of a commit with the author's initials on it.
 const AVATAR_LANE_W: f32 = 22.0;
 const AVATAR_R: f32 = ds::AVATAR_R;
+/// How long a new or jumped-to commit flashes.
+const FLASH_SECS: f64 = 1.2;
+/// How far the flash ring grows beyond the dot.
+const FLASH_GROW: f32 = 12.0;
 
 /// Width the lanes of `lanes` need.
 fn graph_fit(lanes: usize, lane_w: f32) -> f32 {
@@ -513,6 +517,7 @@ pub fn graph_view(
         find,
         limit,
         loading_more,
+        flash,
         ..
     } = tab;
     let Some(data) = data.as_ref() else {
@@ -521,6 +526,16 @@ pub fn graph_view(
     };
     let offset = has_wip as usize;
     let total = data.commits.len() + offset;
+    // A flashing commit and how far along it is (0..1); repaints only while it runs.
+    let flash_t = flash.as_ref().and_then(|(sha, start)| {
+        let t = ((ui.input(|i| i.time) - start) / FLASH_SECS) as f32;
+        (t < 1.0).then(|| (sha.clone(), t.max(0.0)))
+    });
+    if flash_t.is_some() {
+        ui.ctx().request_repaint();
+    } else {
+        *flash = None;
+    }
     // Follow the interface font size from Settings (13 by default).
     let ui_size = ui.style().text_styles[&egui::TextStyle::Body].size;
 
@@ -790,6 +805,19 @@ pub fn graph_view(
                     Rect::from_x_y_ranges(rect.left()..=rect.left() + 3.0, rect.y_range()),
                     0.0,
                     pal.accent,
+                );
+            }
+            // A new or jumped-to commit: the same tint and bar, fading out.
+            if let Some((sha, t)) = &flash_t
+                && !is_wip
+                && data.commits[row - offset].sha == *sha
+            {
+                let a = (1.0 - t) * (1.0 - t);
+                painter.rect_filled(rect, 0.0, pal.accent_soft.gamma_multiply(a));
+                painter.rect_filled(
+                    Rect::from_x_y_ranges(rect.left()..=rect.left() + 3.0, rect.y_range()),
+                    0.0,
+                    pal.accent.gamma_multiply(a),
                 );
             }
 
@@ -1086,6 +1114,19 @@ pub fn graph_view(
             }
             if is_head {
                 gpainter.circle_stroke(node, node_r + 3.5, Stroke::new(1.5, pal.text));
+            }
+            // The flash: one ring growing out of the dot and fading, free to cross row edges.
+            if let Some((sha, t)) = &flash_t
+                && *sha == c.sha
+            {
+                let grow = 1.0 - (1.0 - t).powi(3);
+                let clip =
+                    Rect::from_x_y_ranges(cols.graph.0..=cols.graph.1, ui.clip_rect().y_range());
+                ui.painter().with_clip_rect(clip).circle_stroke(
+                    node,
+                    node_r + 2.0 + FLASH_GROW * grow,
+                    Stroke::new(2.0, pal.accent.gamma_multiply(1.0 - t)),
+                );
             }
             // Dragging over a branch: where the new commit would land, on top of this one.
             if landing.as_deref() == Some(c.sha.as_str()) {

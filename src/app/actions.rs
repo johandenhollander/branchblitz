@@ -76,6 +76,7 @@ impl BranchBlitz {
                     let tab = &mut self.tabs[i];
                     if let Some(&row) = tab.row_of.get(&sha) {
                         tab.scroll_to = Some(row + tab.has_wip_row() as usize);
+                        tab.flash = Some((sha.clone(), self.ctx.input(|i| i.time)));
                     }
                     self.apply(i, vec![Action::Select(Selection::Commit(sha))]);
                 }

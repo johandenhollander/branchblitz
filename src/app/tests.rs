@@ -65,6 +65,25 @@ mod render_tests {
         }
     }
 
+    /// A jumped-to commit flashes: two moments of the fade (steps of 0.25 s).
+    #[test]
+    #[ignore]
+    fn render_flash() {
+        let Some(mut h) = harness(egui::Theme::Dark) else {
+            return;
+        };
+        let sha = h.state().tabs[0].data.as_ref().unwrap().commits[3]
+            .sha
+            .clone();
+        h.state_mut().apply(0, vec![Action::Jump(sha)]);
+        for k in 0..2 {
+            h.step();
+            save(&mut h, &format!("flash-{k}"));
+        }
+        h.run_steps(5);
+        assert!(h.state().tabs[0].flash.is_none(), "the flash ends");
+    }
+
     /// Mid-drag: a commit held over the local `develop` branch (outlined, the label says what a
     /// drop does), then over nothing. Released outside, so the repo is unchanged.
     #[test]

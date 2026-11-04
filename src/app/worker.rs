@@ -74,6 +74,7 @@ pub(super) fn spawn_worker(
                         if need_load {
                             send_load(&mut last, &mut seen, &remote_tags);
                         }
+                        let head = last.as_ref().and_then(|d| d.head_sha.clone());
                         let result = op.run(&path, last.as_ref());
                         if result.is_ok()
                             && let Op::PushTag { remote, name } = &op
@@ -92,13 +93,19 @@ pub(super) fn spawn_worker(
                         // Reload before reporting so the graph is current when the spinner stops.
                         let loaded = load(&paths, &mut seen, &remote_tags);
                         last = loaded.as_ref().ok().cloned();
+                        let moved = last.as_ref().is_some_and(|d| d.head_sha != head);
                         let _ = tx.send(Msg {
                             tab: id,
                             kind: MsgKind::Loaded(generation, loaded),
                         });
                         let _ = tx.send(Msg {
                             tab: id,
-                            kind: MsgKind::OpDone { op, quiet, result },
+                            kind: MsgKind::OpDone {
+                                op,
+                                quiet,
+                                result,
+                                moved,
+                            },
                         });
                         ctx.request_repaint();
                         need_load = false;

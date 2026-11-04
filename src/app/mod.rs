@@ -71,6 +71,8 @@ enum MsgKind {
         op: Op,
         quiet: bool,
         result: Result<String, String>,
+        /// HEAD points at another commit than before the operation.
+        moved: bool,
     },
     Details(String, Result<CommitDetails, String>),
     /// The message of HEAD, to prefill the commit fields for an amend.
@@ -259,6 +261,8 @@ pub struct RepoTab {
     /// Hash of the file text the choices were made on.
     pub conflict_for: u64,
     pub scroll_to: Option<usize>,
+    /// A commit to draw attention to, and when that started (egui time): a new or jumped-to commit.
+    pub flash: Option<(String, f64)>,
     /// Summary line and description of the next commit.
     pub commit_msg: String,
     pub commit_body: String,
@@ -552,6 +556,7 @@ impl BranchBlitz {
             conflict_choices: Vec::new(),
             conflict_for: 0,
             scroll_to: None,
+            flash: None,
             new_branch: None,
             alert: None,
             commit_msg: String::new(),

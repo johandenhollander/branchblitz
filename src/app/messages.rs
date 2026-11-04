@@ -149,7 +149,12 @@ impl BranchBlitz {
                     tab.loading_more = false;
                     tab.load_until = None;
                 }
-                MsgKind::OpDone { op, quiet, result } => {
+                MsgKind::OpDone {
+                    op,
+                    quiet,
+                    result,
+                    moved,
+                } => {
                     let tab = &mut self.tabs[i];
                     tab.running.pop_front();
                     tab.tags_pending = result.is_ok() && matches!(op, Op::Fetch | Op::Pull(_));
@@ -162,6 +167,18 @@ impl BranchBlitz {
                                 tab.commit_no_verify = false;
                                 tab.commit_args.clear();
                                 tab.amend_prefill = None;
+                            }
+                            // The new commit flashes in its place (the graph was reloaded before
+                            // this); a squash merge or one already up to date made none.
+                            if moved
+                                && op.makes_commit()
+                                && let Some(sha) =
+                                    tab.data.as_ref().and_then(|d| d.head_sha.clone())
+                            {
+                                if let Some(&row) = tab.row_of.get(&sha) {
+                                    tab.scroll_to = Some(row + tab.has_wip_row() as usize);
+                                }
+                                tab.flash = Some((sha, self.ctx.input(|i| i.time)));
                             }
                             let first = out
                                 .lines()
