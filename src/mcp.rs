@@ -1189,6 +1189,20 @@ mod tests {
             w.contains("autostash before switching to develop"),
             "stash row in the graph: {w}"
         );
+
+        // A click on the stash in the sidebar selects its row in the graph.
+        let sha = crate::git::git(&dir, &["rev-parse", "refs/stash"]).unwrap();
+        call(&mut s, "click", json!({"label": "Stashes"}));
+        let label =
+            "stash@{0} On feature/PROJ-523-ai-search: autostash before switching to develop";
+        let (err, out) = call(&mut s, "click", json!({ "label": label }));
+        assert!(!err, "{out}");
+        let t = &s.session.as_mut().unwrap().state_mut().tabs_mut()[0];
+        assert!(
+            matches!(&t.selected, crate::app::Selection::Commit(c) if *c == sha.trim()),
+            "selected: {:?}",
+            t.selected
+        );
     }
 
     /// A file staged or a branch made in a terminal shows up without F5 or a focus change, and a

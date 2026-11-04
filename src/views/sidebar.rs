@@ -360,6 +360,9 @@ fn worktree_menu(ui: &mut Ui, pal: &Palette, w: &git::Worktree, dir: &str, acts:
 
 fn stash_row(ui: &mut Ui, pal: &Palette, s: &git::Stash, acts: &mut Vec<Action>) {
     let resp = ds::row(ui, pal, ROW_H, false, &format!("{} {}", s.name, s.message));
+    if resp.clicked() {
+        acts.push(Action::Jump(s.sha.clone()));
+    }
     let r = resp.rect;
     let p = ui.painter();
     let x = r.left() + 6.0 + 14.0;

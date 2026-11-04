@@ -335,6 +335,7 @@ pub enum RepoState {
 #[derive(Clone, Debug)]
 pub struct Stash {
     pub name: String,
+    pub sha: String,
     pub message: String,
 }
 
@@ -706,6 +707,7 @@ pub fn load(repo: &Path, limit: usize) -> Result<RepoData, String> {
         .iter()
         .map(|c| Stash {
             name: c.stash.clone().unwrap_or_default(),
+            sha: c.sha.clone(),
             message: c.subject.clone(),
         })
         .collect();
