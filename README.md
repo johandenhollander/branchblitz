@@ -159,7 +159,7 @@ generated large repository (`scripts/perf-repo.sh`) and writes `perf/<version>.j
 previous release; run it on the same machine before each release.
 Release packages: `scripts/package-linux.sh` (.tar.gz, .deb via `cargo deb`, AppImage) and
 `scripts/package-macos.sh` (universal .app) write to `dist/`; `.github/workflows/release.yml` runs them for a `v*` tag
-and creates a draft release.
+and publishes the release.
 `scripts/demo-repo.sh [dir]` builds a throwaway repository with a remote, branches, merges, a tag and
 uncommitted changes (default `/tmp/bbdemo`). The render tests drive the real UI against it (the merge test
 **merges `origin/develop` into the checked out branch**, so only point it at a throwaway repository).
