@@ -3128,7 +3128,11 @@ mod tests {
         // The name runs a fetch, but the button stays "Pull".
         clear(&mut s);
         fetch(&mut s);
-        assert_eq!(status(&mut s), "Fetch done", "the name should run a fetch");
+        assert_eq!(
+            status(&mut s),
+            "Fetch: Nothing new on the remotes",
+            "the name should run a fetch"
+        );
         assert!(!button(&mut s), "running once must not change the default");
         // The radio makes Fetch All the default without running anything; the menu stays open.
         clear(&mut s);

@@ -154,6 +154,7 @@ impl BranchBlitz {
                     quiet,
                     result,
                     moved,
+                    summary,
                 } => {
                     let tab = &mut self.tabs[i];
                     tab.running.pop_front();
@@ -180,12 +181,13 @@ impl BranchBlitz {
                                 }
                                 tab.flash = Some((sha, self.ctx.input(|i| i.time)));
                             }
-                            let first = out
-                                .lines()
-                                .find(|l| !l.trim().is_empty())
-                                .unwrap_or("")
-                                .trim()
-                                .to_string();
+                            let first = summary.unwrap_or_else(|| {
+                                out.lines()
+                                    .find(|l| !l.trim().is_empty())
+                                    .unwrap_or("")
+                                    .trim()
+                                    .to_string()
+                            });
                             let text = if first.is_empty() {
                                 format!("{} done", op.label())
                             } else {

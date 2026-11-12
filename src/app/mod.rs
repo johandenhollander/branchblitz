@@ -77,6 +77,8 @@ enum MsgKind {
         result: Result<String, String>,
         /// HEAD points at another commit than before the operation.
         moved: bool,
+        /// What it did, for its notification card (see `Op::summary`).
+        summary: Option<String>,
     },
     Details(String, Result<CommitDetails, String>),
     /// The message of HEAD, to prefill the commit fields for an amend.

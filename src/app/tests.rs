@@ -84,7 +84,11 @@ mod render_tests {
                 "Merge develop stopped on conflicts".into(),
                 "Resolve them in the conflict view".into(),
             );
-            app.notify(toasts::Level::Success, "Pull".into(), "Fast-forward".into());
+            app.notify(
+                toasts::Level::Success,
+                "Pull".into(),
+                "3 commits from origin/develop · 5 files changed".into(),
+            );
             h.run_steps(3);
             save(&mut h, &format!("toasts-{name}"));
         }

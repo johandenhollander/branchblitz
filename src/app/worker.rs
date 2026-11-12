@@ -92,8 +92,12 @@ pub(super) fn spawn_worker(
                         let check_tags = result.is_ok() && matches!(op, Op::Fetch | Op::Pull(_));
                         // Reload before reporting so the graph is current when the spinner stops.
                         let loaded = load(&paths, &mut seen, &remote_tags);
-                        last = loaded.as_ref().ok().cloned();
+                        let before = std::mem::replace(&mut last, loaded.as_ref().ok().cloned());
                         let moved = last.as_ref().is_some_and(|d| d.head_sha != head);
+                        let summary = match (&result, &before, &last) {
+                            (Ok(_), Some(b), Some(a)) if !quiet => op.summary(&path, b, a),
+                            _ => None,
+                        };
                         let _ = tx.send(Msg {
                             tab: id,
                             kind: MsgKind::Loaded(generation, loaded),
@@ -105,6 +109,7 @@ pub(super) fn spawn_worker(
                                 quiet,
                                 result,
                                 moved,
+                                summary,
                             },
                         });
                         ctx.request_repaint();

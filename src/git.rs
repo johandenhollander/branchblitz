@@ -1733,6 +1733,15 @@ pub enum Op {
     },
 }
 
+/// `1 commit`, `3 commits`.
+fn commits(n: usize) -> String {
+    plural(n, "commit", "commits")
+}
+
+fn plural(n: usize, one: &str, more: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { more })
+}
+
 impl Op {
     /// Whether a success leaves a new commit at HEAD (a commit, merge, cherry-pick, ...).
     pub fn makes_commit(&self) -> bool {
@@ -1745,6 +1754,115 @@ impl Op {
             | Op::ContinueRebase => true,
             Op::Onto { then, .. } => then.makes_commit(),
             _ => false,
+        }
+    }
+
+    /// What a finished push, pull or fetch did, in one line for its notification card: from the
+    /// repository `before` and `after` it (git itself says it on stderr, or not at all). `None`
+    /// for other operations, which have git's own output.
+    pub fn summary(&self, repo: &Path, before: &RepoData, after: &RepoData) -> Option<String> {
+        let local = |d: &RepoData, name: &str| {
+            d.refs
+                .iter()
+                .find(|r| r.kind == RefKind::Local && r.name == name)
+                .cloned()
+        };
+        match self {
+            Op::Push { force } => {
+                let branch = before.head_branch.as_deref()?;
+                let was = local(before, branch)?;
+                let now = local(after, branch)?;
+                let to = now.upstream.as_deref()?;
+                Some(match &was.upstream {
+                    _ if was.upstream_gone => format!("{branch} published to {to}"),
+                    None => format!("{branch} published to {to}"),
+                    Some(_) if *force => format!("{branch} force-pushed to {to}"),
+                    Some(_) if was.ahead == 0 => format!("{to} was already up to date"),
+                    Some(_) => format!("{} pushed to {to}", commits(was.ahead as usize)),
+                })
+            }
+            Op::PushBranch { remote, branch } => {
+                let was = local(before, branch)?;
+                let to = format!("{remote}/{branch}");
+                let known = before
+                    .refs
+                    .iter()
+                    .find(|r| r.kind == RefKind::Remote && r.name == to);
+                Some(match known {
+                    None => format!("{branch} published to {remote}"),
+                    Some(r) if r.target == was.target => format!("{to} was already up to date"),
+                    Some(_) => format!("{branch} pushed to {to}"),
+                })
+            }
+            Op::Pull(_) => {
+                let branch = before.head_branch.as_deref()?;
+                let from = local(before, branch)?.upstream?;
+                let (old, new) = (before.head_sha.as_deref()?, after.head_sha.as_deref()?);
+                if old == new {
+                    return Some(format!("Already up to date with {from}"));
+                }
+                // What the upstream has now that HEAD did not: right for a merge, a
+                // fast-forward and a rebase alike, also when fetched earlier.
+                let theirs = after.refs.iter().find(|r| r.name == from)?.target.clone();
+                let range = format!("{old}..{theirs}");
+                let n: usize = git(repo, &["rev-list", "--count", &range])
+                    .ok()?
+                    .trim()
+                    .parse()
+                    .ok()?;
+                let what = if n == 0 {
+                    format!("{branch} updated from {from}")
+                } else {
+                    format!("{} from {from}", commits(n))
+                };
+                // ` 3 files changed, 10 insertions(+), 2 deletions(-)`: the first part.
+                let range = format!("{old}..{new}");
+                let files = git(repo, &["diff", "--shortstat", &range]).unwrap_or_default();
+                Some(match files.split(',').next().map(str::trim) {
+                    Some(f) if !f.is_empty() => format!("{what} · {f}"),
+                    _ => what,
+                })
+            }
+            Op::Fetch => {
+                let targets = |d: &RepoData, kind: RefKind| -> HashMap<String, String> {
+                    d.refs
+                        .iter()
+                        .filter(|r| r.kind == kind && r.branch_name() != "HEAD")
+                        .map(|r| (r.name.clone(), r.target.clone()))
+                        .collect()
+                };
+                let (was, now) = (
+                    targets(before, RefKind::Remote),
+                    targets(after, RefKind::Remote),
+                );
+                let updated = now
+                    .iter()
+                    .filter(|(n, t)| was.get(*n).is_some_and(|w| w != *t))
+                    .count();
+                let added = now.keys().filter(|n| !was.contains_key(*n)).count();
+                let removed = was.keys().filter(|n| !now.contains_key(*n)).count();
+                let tags = targets(after, RefKind::Tag).len() as isize
+                    - targets(before, RefKind::Tag).len() as isize;
+                let mut parts = Vec::new();
+                if updated > 0 {
+                    parts.push(format!("{} updated", plural(updated, "branch", "branches")));
+                }
+                if added > 0 {
+                    parts.push(plural(added, "new branch", "new branches"));
+                }
+                if removed > 0 {
+                    parts.push(format!("{} removed", plural(removed, "branch", "branches")));
+                }
+                if tags > 0 {
+                    parts.push(plural(tags as usize, "new tag", "new tags"));
+                }
+                Some(if parts.is_empty() {
+                    "Nothing new on the remotes".into()
+                } else {
+                    parts.join(" · ")
+                })
+            }
+            _ => None,
         }
     }
 
@@ -2509,6 +2627,76 @@ mod tests {
         commit(true, r#"--author="Other Person <o@example.com>""#).unwrap();
         let head = git(&dir, &["log", "-1", "--format=%s|%an"]).unwrap();
         assert_eq!(head.trim(), "Test|Other Person");
+    }
+
+    /// The notification card says what a push, pull or fetch did, not git's terse output.
+    #[test]
+    fn summarizes_push_pull_and_fetch() {
+        let dir = repo("summary");
+        let bare = dir.with_extension("remote.git");
+        let other = dir.with_extension("other");
+        for d in [&bare, &other] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+        let g = |d: &Path, args: &[&str]| git(d, args).unwrap();
+        g(&dir, &["init", "-q", "--bare", bare.to_str().unwrap()]);
+        g(&dir, &["remote", "add", "origin", bare.to_str().unwrap()]);
+        let load = |d: &Path| load(d, 100).unwrap();
+        let run = |d: &Path, op: Op| {
+            let before = load(d);
+            op.run(d, Some(&before))
+                .unwrap_or_else(|e| panic!("{} in {}: {e}", op.label(), d.display()));
+            op.summary(d, &before, &load(d)).unwrap()
+        };
+        let push = || Op::Push { force: false };
+        assert_eq!(run(&dir, push()), "main published to origin/main");
+        assert_eq!(run(&dir, push()), "origin/main was already up to date");
+        for n in 1..=2 {
+            std::fs::write(dir.join(format!("f{n}.txt")), "x\n").unwrap();
+            g(&dir, &["add", "."]);
+            g(&dir, &["commit", "-qm", "more"]);
+        }
+        assert_eq!(run(&dir, push()), "2 commits pushed to origin/main");
+        g(&dir, &["branch", "side"]);
+        let push_side = || Op::PushBranch {
+            remote: "origin".into(),
+            branch: "side".into(),
+        };
+        assert_eq!(run(&dir, push_side()), "side published to origin");
+        assert_eq!(run(&dir, push_side()), "origin/side was already up to date");
+        g(&dir, &["push", "-q", "origin", "--delete", "side"]);
+
+        g(
+            &dir,
+            &[
+                "clone",
+                "-q",
+                "-b",
+                "main",
+                bare.to_str().unwrap(),
+                other.to_str().unwrap(),
+            ],
+        );
+        g(&other, &["config", "user.email", "t@example.com"]);
+        g(&other, &["config", "user.name", "Test"]);
+        let pull = || Op::Pull(PullMode::Merge);
+        assert_eq!(run(&other, pull()), "Already up to date with origin/main");
+        assert_eq!(run(&other, Op::Fetch), "Nothing new on the remotes");
+        std::fs::write(dir.join("a.txt"), "changed\n").unwrap();
+        g(&dir, &["commit", "-qam", "change"]);
+        g(&dir, &["tag", "v1"]);
+        g(&dir, &["push", "-q", "origin", "main", "v1", "main:side"]);
+        assert_eq!(
+            run(&other, Op::Fetch),
+            "1 branch updated · 1 new branch · 1 new tag"
+        );
+        assert_eq!(
+            run(&other, pull()),
+            "1 commit from origin/main · 1 file changed"
+        );
+        for d in [&dir, &bare, &other] {
+            let _ = std::fs::remove_dir_all(d);
+        }
     }
 
     #[test]
