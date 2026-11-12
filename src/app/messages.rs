@@ -191,6 +191,12 @@ impl BranchBlitz {
                             } else {
                                 format!("{}: {}", op.label(), first)
                             };
+                            // Background fetches and staging (seen in the file lists) stay in
+                            // the status bar; everything else also gets a card.
+                            if !quiet && op.notifies() {
+                                let title = self.toast_title(i, &op);
+                                self.notify(toasts::Level::Success, title, first);
+                            }
                             self.status_line = Some((true, text));
                         }
                         Err(e) => {
@@ -202,14 +208,9 @@ impl BranchBlitz {
                                     self.tabs[i].path.display()
                                 ),
                             );
-                            self.status_line = Some((
-                                false,
-                                format!(
-                                    "{} failed: {}",
-                                    op.label(),
-                                    e.lines().next().unwrap_or("")
-                                ),
-                            ));
+                            let reason = e.lines().next().unwrap_or("").to_string();
+                            self.status_line =
+                                Some((false, format!("{} failed: {reason}", op.label())));
                             if let Op::DeleteBranch { name, force: false } = &op
                                 && e.contains("not fully merged")
                             {
@@ -247,10 +248,12 @@ impl BranchBlitz {
                                     }
                                     _ => "",
                                 };
-                                self.status_line = Some((
-                                    true,
-                                    format!("{} stopped on conflicts{then}", op.label()),
-                                ));
+                                let title = self.toast_title(i, &op);
+                                self.notify(
+                                    toasts::Level::Warning,
+                                    format!("{title} stopped on conflicts"),
+                                    format!("Resolve them in the conflict view{then}"),
+                                );
                                 let tab = &mut self.tabs[i];
                                 tab.selected = Selection::Wip;
                                 tab.details = None;
@@ -260,11 +263,19 @@ impl BranchBlitz {
                                 );
                                 continue;
                             }
-                            if !quiet {
-                                self.offer_modal(Modal::Error {
+                            // The full output in a dialog; with another dialog open, a card.
+                            if !quiet
+                                && !self.offer_modal(Modal::Error {
                                     title: format!("{} failed", op.label()),
                                     body: e,
-                                });
+                                })
+                            {
+                                let title = self.toast_title(i, &op);
+                                self.notify(
+                                    toasts::Level::Error,
+                                    format!("{title} failed"),
+                                    reason,
+                                );
                             }
                         }
                     }
@@ -293,7 +304,7 @@ impl BranchBlitz {
                             tab.amend_prefill = Some((summary, body));
                         }
                         Ok(_) => {}
-                        Err(e) => self.status_line = Some((false, e)),
+                        Err(e) => self.notify(toasts::Level::Error, "Amend".into(), e),
                     }
                 }
                 MsgKind::Diff(generation, target, r) => {
@@ -341,5 +352,20 @@ impl BranchBlitz {
                 | MsgKind::PickedHomeDir(_) => unreachable!(),
             }
         }
+    }
+
+    /// The card title for `op` in tab `i`: with the repository's name when that tab is not the
+    /// one in front.
+    fn toast_title(&self, i: usize, op: &Op) -> String {
+        let label = op.label();
+        if self.active == Some(i) {
+            return label;
+        }
+        let name = self.tabs[i]
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        format!("{label} in {name}")
     }
 }

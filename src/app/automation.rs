@@ -238,6 +238,11 @@ impl BranchBlitz {
                 v
             }),
             "status_line": self.status_line.as_ref().map(|(ok, s)| json!({"ok": ok, "text": s})),
+            "toasts": self.toasts.iter().map(|t| json!({
+                "level": format!("{:?}", t.level),
+                "title": t.title,
+                "body": t.body,
+            })).collect::<Vec<_>>(),
             "theme": format!("{:?}", self.settings.theme),
             "theme_name": self.settings.theme_name,
             "busy": self.is_busy(),

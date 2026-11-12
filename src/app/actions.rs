@@ -5,10 +5,13 @@ use super::*;
 impl BranchBlitz {
     /// Shows a modal that was not directly asked for (a failed background operation),
     /// without throwing away a dialog the user is typing in. The status bar still shows it.
-    pub(super) fn offer_modal(&mut self, modal: Modal) {
-        if self.modal.is_none() {
+    /// Whether it is shown (false: another dialog is open).
+    pub(super) fn offer_modal(&mut self, modal: Modal) -> bool {
+        let free = self.modal.is_none();
+        if free {
             self.modal = Some(modal);
         }
+        free
     }
 
     pub(crate) fn apply(&mut self, i: usize, actions: Vec<Action>) {

@@ -34,9 +34,13 @@ mod notices;
 mod settings;
 #[cfg(test)]
 mod tests;
+mod toasts;
 mod worker;
 
 pub(crate) use chrome::split_message;
+
+/// Height of the status bar at the bottom of the window.
+const STATUS_H: f32 = 26.0;
 use modals::modal_title;
 use notices::system_info;
 pub use settings::{AuthorPlace, ColumnWidths, Settings};
@@ -352,6 +356,8 @@ pub struct BranchBlitz {
     /// The tab to return to when the welcome screen ("New tab") is closed.
     back_to: Option<u64>,
     status_line: Option<(bool, String)>,
+    /// Notification cards, oldest first (see `toasts`).
+    toasts: Vec<toasts::Toast>,
     was_focused: bool,
     /// Driven by the MCP server: no window, so no dialogs of our own.
     headless: bool,
@@ -424,6 +430,7 @@ impl BranchBlitz {
             focus_welcome: true,
             back_to: None,
             status_line: None,
+            toasts: Vec::new(),
             was_focused: true,
             headless: false,
             confirm_danger: false,
@@ -800,9 +807,11 @@ impl BranchBlitz {
             Ok(mut child) => {
                 std::thread::spawn(move || child.wait());
             }
-            Err(e) => {
-                self.status_line = Some((false, format!("Cannot open {}: {e}", path.display())))
-            }
+            Err(e) => self.notify(
+                toasts::Level::Error,
+                format!("Cannot open {}", path.display()),
+                e.to_string(),
+            ),
         }
     }
 
@@ -867,7 +876,7 @@ impl BranchBlitz {
                         *busy = false;
                         *error = Some(e);
                     }
-                    _ => self.status_line = Some((false, format!("Clone failed: {e}"))),
+                    _ => self.notify(toasts::Level::Error, "Clone failed".into(), e),
                 }
             }
         }

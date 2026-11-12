@@ -3177,6 +3177,30 @@ mod tests {
         assert!(status.starts_with("Pull"), "pull did not run: {status}");
     }
 
+    /// A fetch ends with a notification card, which its close button takes away.
+    #[test]
+    fn fetch_shows_a_card_until_closed() {
+        let mut s = Server::default();
+        call(&mut s, "demo_repo", json!({}));
+        call(&mut s, "wait_idle", json!({}));
+        fetch(&mut s);
+        let st: Value =
+            serde_json::from_str(&call(&mut s, "state", json!({"commits": 0})).1).unwrap();
+        let toasts = st["toasts"].as_array().unwrap();
+        assert_eq!(toasts.len(), 1, "{st}");
+        assert_eq!(toasts[0]["level"], json!("Success"), "{st}");
+        assert_eq!(toasts[0]["title"], json!("Fetch"), "{st}");
+        let (err, out) = call(
+            &mut s,
+            "click",
+            json!({"label": "Close notification: Fetch"}),
+        );
+        assert!(!err, "{out}");
+        let st: Value =
+            serde_json::from_str(&call(&mut s, "state", json!({"commits": 0})).1).unwrap();
+        assert!(st["toasts"].as_array().unwrap().is_empty(), "{st}");
+    }
+
     /// Double-clicking a column border fits the column to its contents, like Excel.
     #[test]
     fn double_click_fits_columns() {

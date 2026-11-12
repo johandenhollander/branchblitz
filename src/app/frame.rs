@@ -93,7 +93,7 @@ impl eframe::App for BranchBlitz {
                         .fill(pal.app)
                         .inner_margin(egui::Margin::symmetric(12, 0)),
                 )
-                .exact_size(26.0)
+                .exact_size(STATUS_H)
                 .show(ui, |ui| app.status_bar(ui, &pal));
         };
 
@@ -102,6 +102,7 @@ impl eframe::App for BranchBlitz {
             egui::CentralPanel::default()
                 .frame(egui::Frame::new().fill(pal.canvas))
                 .show(ui, |ui| self.welcome(ui, &pal));
+            self.show_toasts(&ctx, &pal);
             self.show_modal(&ctx);
             return;
         };
@@ -272,6 +273,7 @@ impl eframe::App for BranchBlitz {
 
         views::drag_ghost(&ctx, &pal);
         self.apply(i, acts);
+        self.show_toasts(&ctx, &pal);
         self.show_modal(&ctx);
     }
 

@@ -1748,6 +1748,21 @@ impl Op {
         }
     }
 
+    /// Whether a success is worth a notification card; staging is seen in the file lists.
+    pub fn notifies(&self) -> bool {
+        match self {
+            Op::Stage(_)
+            | Op::StageAll
+            | Op::ApplyPatch { .. }
+            | Op::Unstage(_)
+            | Op::UnstageAll
+            | Op::MarkResolved(_)
+            | Op::TakeSide { .. } => false,
+            Op::Onto { then, .. } => then.notifies(),
+            _ => true,
+        }
+    }
+
     pub fn label(&self) -> String {
         match self {
             Op::Fetch => "Fetch".into(),
@@ -2320,6 +2335,21 @@ pub fn split_args(s: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn staging_gets_no_card() {
+        assert!(Op::Pull(PullMode::Merge).notifies());
+        assert!(Op::Push { force: false }.notifies());
+        assert!(!Op::StageAll.notifies());
+        assert!(!Op::Unstage(vec!["a".into()]).notifies());
+        let onto = |then| Op::Onto {
+            branch: "main".into(),
+            pull: None,
+            then: Box::new(then),
+        };
+        assert!(onto(Op::CherryPick("abc".into())).notifies());
+        assert!(!onto(Op::StageAll).notifies());
+    }
 
     #[test]
     fn body_preview_joins_lines_and_shortens() {

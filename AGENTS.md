@@ -16,8 +16,8 @@ Fast desktop git client in Rust (eframe/egui 0.37). Focus: see every local/remot
 ```
 src/main.rs    viewport + run_native
 src/app/       App state and tabs (mod.rs); frame loop, actions, messages, worker, chrome (tab bar,
-               toolbar, status bar, welcome), modals, settings, notices, agent_tools, automation
-               (MCP/test hooks), tests (render + glyph checks)
+               toolbar, status bar, welcome), modals, settings, notices, toasts (notification
+               cards), agent_tools, automation (MCP/test hooks), tests (render + glyph checks)
 src/views/     panels drawn per frame: sidebar, graph (+ find bar), menus, details (commit/WIP),
                diff, conflict_view, banner (state/alert bars), agent_panel
 src/git.rs     git CLI layer: load(), Op enum, diff; integration tests against temp repos

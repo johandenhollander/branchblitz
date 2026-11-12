@@ -65,6 +65,31 @@ mod render_tests {
         }
     }
 
+    /// Notification cards in the bottom-left corner: success, warning, error.
+    #[test]
+    #[ignore]
+    fn render_toasts() {
+        for (theme, name) in [(egui::Theme::Dark, "dark"), (egui::Theme::Light, "light")] {
+            let Some(mut h) = harness(theme) else { return };
+            let app = h.state_mut();
+            app.notify(
+                toasts::Level::Error,
+                "Push failed".into(),
+                "Updates were rejected because the remote contains work that you do not have \
+                 locally."
+                    .into(),
+            );
+            app.notify(
+                toasts::Level::Warning,
+                "Merge develop stopped on conflicts".into(),
+                "Resolve them in the conflict view".into(),
+            );
+            app.notify(toasts::Level::Success, "Pull".into(), "Fast-forward".into());
+            h.run_steps(3);
+            save(&mut h, &format!("toasts-{name}"));
+        }
+    }
+
     /// A jumped-to commit flashes: two moments of the fade (steps of 0.25 s).
     #[test]
     #[ignore]
@@ -278,6 +303,39 @@ mod settings_tests {
             })
             .collect();
         assert_eq!(dy, vec![-2.5, -1.0]);
+    }
+}
+
+#[cfg(test)]
+mod toast_tests {
+    use super::*;
+
+    /// Success cards go after a few seconds; errors stay. The same message again replaces its
+    /// card, and only the newest few are kept.
+    #[test]
+    fn cards_expire_dedupe_and_cap() {
+        let mut h = egui_kittest::Harness::builder().build_eframe(|cc| BranchBlitz::new(cc, None));
+        let app = h.state_mut();
+        app.notify(
+            toasts::Level::Error,
+            "Push failed".into(),
+            "rejected".into(),
+        );
+        app.notify(toasts::Level::Success, "Pull".into(), String::new());
+        app.notify(toasts::Level::Success, "Pull".into(), String::new());
+        assert_eq!(h.state().toasts.len(), 2);
+        h.run_steps(4);
+        assert_eq!(h.state().toasts.len(), 2, "still shown shortly after");
+        // Steps are 0.25 s: well past the 5 s of a success card.
+        h.run_steps(30);
+        let left: Vec<_> = h.state().toasts.iter().map(|t| t.title.clone()).collect();
+        assert_eq!(left, vec!["Push failed".to_string()]);
+        for n in 0..6 {
+            h.state_mut()
+                .notify(toasts::Level::Error, format!("E{n}"), String::new());
+        }
+        let titles: Vec<_> = h.state().toasts.iter().map(|t| t.title.clone()).collect();
+        assert_eq!(titles, vec!["E2", "E3", "E4", "E5"]);
     }
 }
 
