@@ -155,9 +155,11 @@ impl BranchBlitz {
                     result,
                     moved,
                     summary,
+                    change,
                 } => {
                     let tab = &mut self.tabs[i];
                     tab.running.pop_front();
+                    tab.record(&op, &result, change);
                     tab.tags_pending = result.is_ok() && matches!(op, Op::Fetch | Op::Pull(_));
                     match result {
                         Ok(out) => {

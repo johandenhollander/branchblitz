@@ -95,6 +95,16 @@ pub fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
     result(output(repo, args)?)
 }
 
+/// Like [`git`], with `index` as the index file instead of the repository's own.
+pub fn git_index(repo: &Path, index: &Path, args: &[&str]) -> Result<String, String> {
+    let mut cmd = command(repo);
+    cmd.env("GIT_INDEX_FILE", index).args(args);
+    result(
+        cmd.output()
+            .map_err(|e| format!("Could not start git: {e}"))?,
+    )
+}
+
 /// `git stash push --include-untracked` without literal pathspecs: git cleans the stashed
 /// untracked files with the pathspec `:/`, which taken literally matches nothing, so they would
 /// stay behind (and block the pop later). No paths of ours are passed here.
@@ -1714,6 +1724,10 @@ pub enum Op {
         pull: Option<(String, String)>,
         then: Box<Op>,
     },
+    /// Takes back an operation (see [`crate::undo`]).
+    Undo(Box<crate::undo::Change>),
+    /// Does an undone operation again.
+    Redo(Box<crate::undo::Change>),
     /// `git flow init` without git-flow, also to change its settings later: the branch roles,
     /// prefixes and version tag prefix in the repository config; `develop` is created from
     /// `master` when missing.
@@ -1936,6 +1950,8 @@ impl Op {
                 Op::Merge { what, .. } => format!("Merge {what} into {branch}"),
                 other => other.label(),
             },
+            Op::Undo(c) => c.undo_label(),
+            Op::Redo(c) => c.redo_label(),
             Op::FlowInit { .. } => "Initialize git flow".into(),
             Op::FlowStart { kind, name } => format!("Start {} {name}", kind.name()),
             Op::FlowFinish { branch } => format!("Finish {branch}"),
@@ -2337,6 +2353,8 @@ impl Op {
                 g(&["switch", "-c", &branch, base])
             }
             Op::FlowFinish { branch } => flow_finish(repo, branch),
+            Op::Undo(c) => c.undo(repo),
+            Op::Redo(c) => c.redo(repo),
         }
     }
 }

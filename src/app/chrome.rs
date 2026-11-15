@@ -404,6 +404,55 @@ impl BranchBlitz {
                     .layout(egui::Layout::left_to_right(egui::Align::Center)),
                 |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
+                    // Like GitKraken: take back the last local operation, or do it again.
+                    let idle = tab.running.is_empty();
+                    let keys = idle
+                        && self.modal.is_none()
+                        && !egui::Popup::is_any_open(ui.ctx())
+                        && ui.ctx().memory(|m| m.focused().is_none());
+                    let (undo_key, redo_key) = ui.input_mut(|i| {
+                        let shift = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+                        if !keys {
+                            return (false, false);
+                        }
+                        let redo = i.consume_key(shift, egui::Key::Z)
+                            || i.consume_key(egui::Modifiers::COMMAND, egui::Key::Y);
+                        (i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z), redo)
+                    });
+                    let last_undo = tab.undo.last();
+                    let undo = ds::Button::new(label("Undo", local_labels))
+                        .icon(icons::UNDO_2)
+                        .quiet()
+                        .label("Undo")
+                        .enabled(idle && last_undo.is_some())
+                        .tooltip(last_undo.map_or("Nothing to undo".into(), |c| {
+                            format!("{} (Ctrl Z)", c.undo_label())
+                        }))
+                        .show(ui, pal);
+                    if (undo.clicked() || undo_key)
+                        && let Some(c) = last_undo
+                    {
+                        acts.push(Action::Op(Op::Undo(Box::new(c.clone()))));
+                    }
+                    let last_redo = tab.redo.last();
+                    let redo = ds::Button::new(label("Redo", local_labels))
+                        .icon(icons::REDO_2)
+                        .quiet()
+                        .label("Redo")
+                        .enabled(idle && last_redo.is_some())
+                        .tooltip(last_redo.map_or("Nothing to redo".into(), |c| {
+                            format!("{} (Ctrl Shift Z)", c.redo_label())
+                        }))
+                        .show(ui, pal);
+                    if (redo.clicked() || redo_key)
+                        && let Some(c) = last_redo
+                    {
+                        acts.push(Action::Op(Op::Redo(Box::new(c.clone()))));
+                    }
+                    ui.add_space(gap - 4.0);
+                    let (sep, _) = ui.allocate_exact_size(egui::vec2(1.0, 20.0), egui::Sense::hover());
+                    ui.painter().rect_filled(sep, 0.0, pal.border);
+                    ui.add_space(gap - 4.0);
                     // GitKraken style: one button for pull or fetch, its default chosen below.
                     let fetch_default = self
                         .settings

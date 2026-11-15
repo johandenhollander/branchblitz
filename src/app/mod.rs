@@ -79,6 +79,8 @@ enum MsgKind {
         moved: bool,
         /// What it did, for its notification card (see `Op::summary`).
         summary: Option<String>,
+        /// How to take it back, when it can be.
+        change: Option<crate::undo::Change>,
     },
     Details(String, Result<CommitDetails, String>),
     /// The message of HEAD, to prefill the commit fields for an amend.
@@ -288,6 +290,9 @@ pub struct RepoTab {
     /// The name field for a new branch, shown in the graph on the row it starts at.
     pub new_branch: Option<NewBranch>,
     pub alert: Option<Alert>,
+    /// Operations to undo (last one last), and undone ones to redo.
+    pub undo: Vec<crate::undo::Change>,
+    pub redo: Vec<crate::undo::Change>,
     last_fetch: Option<Instant>,
     loads_requested: u64,
     loads_done: u64,
@@ -330,7 +335,43 @@ pub struct NewBranch {
     pub focused: bool,
 }
 
+/// How many operations a tab can undo.
+const UNDO_MAX: usize = 50;
+
 impl RepoTab {
+    /// Keeps the undo and redo stacks up to date with a finished operation.
+    fn record(
+        &mut self,
+        op: &Op,
+        result: &Result<String, String>,
+        change: Option<crate::undo::Change>,
+    ) {
+        let moved = |from: &mut Vec<crate::undo::Change>, to: &mut Vec<_>, id| {
+            if let Some(at) = from.iter().rposition(|c: &crate::undo::Change| c.id == id) {
+                to.push(from.remove(at));
+            }
+        };
+        match (op, result) {
+            (Op::Undo(c), Ok(_)) => moved(&mut self.undo, &mut self.redo, c.id),
+            (Op::Redo(c), Ok(_)) => moved(&mut self.redo, &mut self.undo, c.id),
+            // Made since: what was recorded no longer fits.
+            (Op::Undo(_) | Op::Redo(_), Err(e)) if e.starts_with(crate::undo::STALE) => {
+                self.undo.clear();
+                self.redo.clear();
+            }
+            (_, Ok(_)) => {
+                if let Some(c) = change {
+                    self.redo.clear();
+                    self.undo.push(c);
+                    if self.undo.len() > UNDO_MAX {
+                        self.undo.remove(0);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub fn is_fetching(&self) -> bool {
         self.running.iter().any(|l| l == "Fetch")
     }
@@ -568,6 +609,8 @@ impl BranchBlitz {
             flash: None,
             new_branch: None,
             alert: None,
+            undo: Vec::new(),
+            redo: Vec::new(),
             commit_msg: String::new(),
             commit_body: String::new(),
             amend: false,

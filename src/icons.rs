@@ -51,6 +51,7 @@ pub const TRASH_2: &str = "\u{e18e}";
 pub const TREE_PINE: &str = "\u{e2f4}";
 pub const TRIANGLE_ALERT: &str = "\u{e193}";
 pub const UNDO_2: &str = "\u{e2a1}";
+pub const REDO_2: &str = "\u{e2a0}";
 pub const UPLOAD: &str = "\u{e19e}";
 pub const X: &str = "\u{e1b2}";
 pub const LOCK: &str = "\u{e10f}";
@@ -109,6 +110,7 @@ pub const ALL: &[&str] = &[
     TREE_PINE,
     TRIANGLE_ALERT,
     UNDO_2,
+    REDO_2,
     UPLOAD,
     X,
     LOCK,

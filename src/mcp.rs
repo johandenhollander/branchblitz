@@ -1291,6 +1291,59 @@ mod tests {
         assert_eq!(head.trim_end(), "Only a description\n\nWhy.");
     }
 
+    /// Undo takes a commit back (its changes staged again), redo makes it again; Ctrl Z and
+    /// Ctrl Shift Z do the same while no text field has the keyboard.
+    #[test]
+    fn undo_and_redo_a_commit() {
+        let mut s = Server::default();
+        call(&mut s, "demo_repo", json!({}));
+        call(&mut s, "wait_idle", json!({}));
+        let dir = s.demo_dirs[0].join("work");
+        let head = || crate::git::git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        let before = head();
+        crate::git::git(&dir, &["stash", "-u", "-q"]).unwrap();
+        std::fs::write(dir.join("undo.txt"), "x\n").unwrap();
+        crate::git::git(&dir, &["add", "undo.txt"]).unwrap();
+        call(&mut s, "key", json!({"key": "F5"}));
+        call(&mut s, "wait_idle", json!({}));
+        call(&mut s, "click", json!({"label": "WIP"}));
+        let h = s.session.as_mut().unwrap();
+        h.state_mut().tabs_mut()[0].commit_msg = "To undo".into();
+        h.step();
+        let (err, out) = call(&mut s, "click", json!({ "label": "Commit 1 file" }));
+        assert!(!err, "{out}");
+        call(&mut s, "wait_idle", json!({}));
+        let committed = head();
+        assert_ne!(committed, before);
+
+        let (err, out) = call(&mut s, "click", json!({"label": "Undo"}));
+        assert!(!err, "{out}");
+        call(&mut s, "wait_idle", json!({}));
+        assert_eq!(head(), before);
+        let staged = crate::git::git(&dir, &["diff", "--cached", "--name-only"]).unwrap();
+        assert_eq!(staged.trim(), "undo.txt");
+
+        call(&mut s, "click", json!({"label": "Redo"}));
+        call(&mut s, "wait_idle", json!({}));
+        assert_eq!(head(), committed);
+
+        // The commit message field had the keyboard; clicking the graph takes it away.
+        call(&mut s, "click", json!({"label": "WIP"}));
+        call(&mut s, "key", json!({"key": "Escape"}));
+        call(&mut s, "key", json!({"key": "Z", "modifiers": ["ctrl"]}));
+        call(&mut s, "wait_idle", json!({}));
+        assert_eq!(head(), before);
+        call(
+            &mut s,
+            "key",
+            json!({"key": "Z", "modifiers": ["ctrl", "shift"]}),
+        );
+        call(&mut s, "wait_idle", json!({}));
+        assert_eq!(head(), committed);
+        let t = &s.session.as_mut().unwrap().state_mut().tabs_mut()[0];
+        assert_eq!((t.undo.len(), t.redo.len()), (1, 0));
+    }
+
     /// After a fetch BranchBlitz knows which tags are on the remote; only the others are drawn
     /// as unpushed (dashed).
     #[test]

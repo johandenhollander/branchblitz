@@ -19,6 +19,7 @@ mod perf;
 mod settings_view;
 mod system_theme;
 mod theme;
+mod undo;
 mod views;
 
 /// The window icon. Desktops that go by the app id (Wayland) take the installed

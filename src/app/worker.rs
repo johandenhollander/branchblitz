@@ -75,7 +75,7 @@ pub(super) fn spawn_worker(
                             send_load(&mut last, &mut seen, &remote_tags);
                         }
                         let head = last.as_ref().and_then(|d| d.head_sha.clone());
-                        let result = op.run(&path, last.as_ref());
+                        let (result, change) = crate::undo::run(&op, &path, last.as_ref());
                         if result.is_ok()
                             && let Op::PushTag { remote, name } = &op
                             && let Some(t) = &mut remote_tags
@@ -110,6 +110,7 @@ pub(super) fn spawn_worker(
                                 result,
                                 moved,
                                 summary,
+                                change,
                             },
                         });
                         ctx.request_repaint();
