@@ -238,7 +238,7 @@ fn commit_meta(
                 dt(ui, "On");
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-                    for pill in pills_for(idxs, data) {
+                    for pill in pills_for(idxs, data, &tab.coloring) {
                         let lane = pill_lane(&pill, data, &tab.coloring, pal, pal.accent);
                         let (g, w) = ds::chip_layout_prefixed(
                             ui.painter(),

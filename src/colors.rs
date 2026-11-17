@@ -127,6 +127,8 @@ pub struct Coloring {
     pub commit: Vec<usize>,
     paints: Vec<Paint>,
     by_branch: HashMap<String, usize>,
+    /// Index of the first rule that matches a branch (by name, without remote prefix).
+    rank: HashMap<String, usize>,
 }
 
 impl Coloring {
@@ -143,6 +145,12 @@ impl Coloring {
     pub fn branch(&self, name: &str, pal: &Palette) -> Option<Color32> {
         self.by_branch.get(name).map(|&k| self.color(k, pal))
     }
+
+    /// How important the user's rules make a branch: the index of its first matching rule,
+    /// `usize::MAX` when none matches.
+    pub fn rank(&self, name: &str) -> usize {
+        self.rank.get(name).copied().unwrap_or(usize::MAX)
+    }
 }
 
 struct Builder<'a> {
@@ -158,11 +166,14 @@ impl Builder<'_> {
             return k;
         }
         let role = self.flow.canonical(name);
-        let paint = match self
+        let rank = self
             .rules
             .iter()
-            .find(|r| r.matches(name) || r.matches(&role))
-        {
+            .position(|r| r.matches(name) || r.matches(&role));
+        if let Some(i) = rank {
+            self.c.rank.insert(name.to_string(), i);
+        }
+        let paint = match rank.map(|i| &self.rules[i]) {
             Some(r) => Paint::Fixed(Color32::from_rgb(r.color[0], r.color[1], r.color[2])),
             None => {
                 // FNV-1a: the same name gets the same palette colour in every run and build.

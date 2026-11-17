@@ -99,49 +99,14 @@ impl Pill {
     }
 }
 
-/// Long-lived branches, in the order their chips go first when a commit has more refs than fit.
-const MAINLINES: [&str; 9] = [
-    "main",
-    "master",
-    "production",
-    "prod",
-    "staging",
-    "acceptance",
-    "test",
-    "develop",
-    "development",
-];
-
-/// Lower is more important: the remote's default branch, git-flow's master and develop, then
-/// the usual long-lived names; everything else (feature branches, tags) after them.
-fn mainline_rank(r: &crate::git::RefInfo, data: &RepoData) -> usize {
-    if r.kind == RefKind::Tag {
-        return usize::MAX;
-    }
-    let name = r.branch_name();
-    // By name, so a branch and its copies on all remotes rank alike and keep their order.
-    let default = data.remotes.iter().any(|rm| {
-        data.default_branches.iter().any(|d| {
-            d.strip_prefix(rm.as_str())
-                .and_then(|s| s.strip_prefix('/'))
-                == Some(name)
-        })
-    });
-    if default {
-        0
-    } else if data.flow.master.as_deref() == Some(name) {
-        1
-    } else if data.flow.develop.as_deref() == Some(name) {
-        2
-    } else {
-        MAINLINES
-            .iter()
-            .position(|m| *m == name)
-            .map_or(usize::MAX, |p| 3 + p)
-    }
-}
-
-pub(super) fn pills_for(idxs: &[usize], data: &RepoData) -> Vec<Pill> {
+/// The chips for the refs at one commit: the checked out branch first, then in the order of the
+/// user's branch colour rules (`master, main` before `develop` before `feature/*`), local before
+/// remote, tags last.
+pub(super) fn pills_for(
+    idxs: &[usize],
+    data: &RepoData,
+    coloring: &crate::colors::Coloring,
+) -> Vec<Pill> {
     let mut pills: Vec<Pill> = Vec::new();
     let mut order: Vec<usize> = idxs.to_vec();
     let rank = |i: &usize| {
@@ -149,7 +114,10 @@ pub(super) fn pills_for(idxs: &[usize], data: &RepoData) -> Vec<Pill> {
         let cur = r.kind == RefKind::Local && data.head_branch.as_deref() == Some(r.name.as_str());
         (
             if cur { 0 } else { 1 },
-            mainline_rank(r, data),
+            match r.kind {
+                RefKind::Tag => usize::MAX,
+                _ => coloring.rank(r.branch_name()),
+            },
             match r.kind {
                 RefKind::Local => 0,
                 RefKind::Remote => 1,
@@ -442,17 +410,58 @@ fn fade_right(painter: &Painter, x: f32, y: egui::Rangef, bg: Color32) {
     painter.add(egui::Shape::mesh(mesh));
 }
 
+/// Width of a "+N" chip and the gap before it.
+fn more_width(painter: &Painter, n: usize, pal: &Palette) -> f32 {
+    painter
+        .layout_job(ds::text_job(
+            &format!("+{n}"),
+            11.0,
+            600.0,
+            pal.text_muted,
+            true,
+        ))
+        .size()
+        .x
+        + 14.0
+}
+
+/// How many chips a row shows in `avail` points: two always (shortened if needed); with more,
+/// as many as fit at full width next to a "+N" for the rest, at least one.
+fn chips_shown(painter: &Painter, pills: &[Pill], pal: &Palette, avail: f32) -> usize {
+    if pills.len() <= 2 {
+        return pills.len();
+    }
+    let mut used = 0.0;
+    let mut shown = 0;
+    for (i, p) in pills.iter().enumerate() {
+        used += ds::chip_layout_prefixed(painter, p.prefix.as_deref(), &p.text, p.kind, pal, 1e6).1
+            + 4.0;
+        let rest = pills.len() - i - 1;
+        let more = if rest > 0 {
+            more_width(painter, rest, pal)
+        } else {
+            0.0
+        };
+        if used + more > avail {
+            break;
+        }
+        shown = i + 1;
+    }
+    shown.max(1)
+}
+
 /// Width the branch column needs for the chips of every commit, drawn as in the graph.
 fn fit_refs(
     painter: &Painter,
     data: &RepoData,
     refs_at: &std::collections::HashMap<String, Vec<usize>>,
+    coloring: &crate::colors::Coloring,
     pal: &Palette,
 ) -> f32 {
     refs_at
         .values()
         .map(|idxs| {
-            let pills = pills_for(idxs, data);
+            let pills = pills_for(idxs, data, coloring);
             let shown = if pills.len() > 2 { 1 } else { pills.len() };
             let mut w: f32 = pills[..shown]
                 .iter()
@@ -469,14 +478,7 @@ fn fit_refs(
                 })
                 .sum();
             if pills.len() > shown {
-                let g = painter.layout_job(ds::text_job(
-                    &format!("+{}", pills.len() - shown),
-                    11.0,
-                    600.0,
-                    pal.text_muted,
-                    true,
-                ));
-                w += g.size().x + 14.0;
+                w += more_width(painter, pills.len() - shown, pal);
             }
             w + 4.0
         })
@@ -701,7 +703,7 @@ pub fn graph_view(
     let gap = 12.0;
     let (dx, fit) = handle(cols.refs.1 + 6.0, "Resize branch column");
     *ref_col_w = if fit {
-        fit_refs(ui.painter(), data, refs_at, pal)
+        fit_refs(ui.painter(), data, refs_at, coloring, pal)
     } else {
         *ref_col_w + dx
     }
@@ -1017,27 +1019,17 @@ pub fn graph_view(
                     Stroke::new(1.0, color.gamma_multiply(0.6)),
                 );
             } else if let Some(idxs) = refs_at.get(&c.sha) {
-                let mut pills = pills_for(idxs, data);
+                let mut pills = pills_for(idxs, data, coloring);
                 // Two chips: the checked out branch on the right, next to its dot, where it
                 // keeps its full name.
                 if pills.len() == 2 && pills[0].kind.head {
                     pills.swap(0, 1);
                 }
-                let shown = if pills.len() > 2 { 1 } else { pills.len() };
+                let shown = chips_shown(&painter, &pills, pal, cols.refs.1 - cols.refs.0);
                 let more = pills.len() - shown;
                 // Width of "+N" and its gap, kept free at the right.
                 let more_w = if more > 0 {
-                    painter
-                        .layout_job(ds::text_job(
-                            &format!("+{more}"),
-                            11.0,
-                            600.0,
-                            pal.text_muted,
-                            true,
-                        ))
-                        .size()
-                        .x
-                        + 14.0
+                    more_width(&painter, more, pal)
                 } else {
                     0.0
                 };
@@ -1393,7 +1385,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mainline_branches_come_before_feature_branches() {
+    fn chips_follow_the_order_of_the_colour_rules() {
         use crate::git::{RefInfo, RepoState};
         let r = |name: &str, kind: RefKind| RefInfo {
             name: name.into(),
@@ -1419,7 +1411,15 @@ mod tests {
                 r("origin/staging", RefKind::Remote),
                 r("v1", RefKind::Tag),
             ],
-            commits: vec![],
+            commits: vec![crate::git::Commit {
+                sha: "x".into(),
+                parents: vec![],
+                author: String::new(),
+                time: 0,
+                subject: String::new(),
+                body: String::new(),
+                stash: None,
+            }],
             status: Default::default(),
             state: RepoState::Clean,
             stashes: vec![],
@@ -1429,45 +1429,43 @@ mod tests {
             flow: Default::default(),
             remote_tags: None,
         };
-        let names = |data: &RepoData| -> Vec<String> {
-            pills_for(&[0, 1, 2, 3, 4, 5], data)
+        let rule = |p: &str| crate::colors::ColorRule {
+            patterns: p.into(),
+            color: [0, 0, 0],
+        };
+        let names = |data: &RepoData, rules: &[crate::colors::ColorRule]| -> Vec<String> {
+            let coloring = crate::colors::assign(data, rules);
+            pills_for(&[0, 1, 2, 3, 4, 5], data, &coloring)
                 .into_iter()
                 .map(|p| p.text)
                 .collect()
         };
+        let mut rules = vec![
+            rule("master, main"),
+            rule("develop, development"),
+            rule("staging"),
+            rule("feature/*"),
+        ];
         assert_eq!(
-            names(&data),
+            names(&data, &rules),
             [
                 "master",
-                "staging",
                 "develop",
+                "staging",
                 "feature/a",
                 "feature/b",
                 "v1"
             ]
         );
-        // The remote's default branch goes first.
-        let data = RepoData {
-            default_branches: vec!["origin/develop".into()],
-            ..data
-        };
-        assert_eq!(names(&data)[0], "develop");
-        // git-flow's configured master goes before the usual names.
-        let data = RepoData {
-            default_branches: vec![],
-            flow: crate::git::GitFlow {
-                develop: Some("staging".into()),
-                ..Default::default()
-            },
-            ..data
-        };
-        assert_eq!(names(&data)[..2], ["staging", "master"]);
+        // The user's order counts: staging moved to the top.
+        rules.swap(0, 2);
+        assert_eq!(names(&data, &rules)[..3], ["staging", "develop", "master"]);
         // The checked out branch stays first.
         let data = RepoData {
             head_branch: Some("feature/a".into()),
             ..data
         };
-        assert_eq!(names(&data)[0], "feature/a");
+        assert_eq!(names(&data, &rules)[0], "feature/a");
     }
 
     #[test]
