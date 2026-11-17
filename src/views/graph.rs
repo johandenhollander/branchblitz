@@ -99,9 +99,9 @@ impl Pill {
     }
 }
 
-/// The chips for the refs at one commit: the checked out branch first, then in the order of the
-/// user's branch colour rules (`master, main` before `develop` before `feature/*`), local before
-/// remote, tags last.
+/// The chips for the refs at one commit: tags first (leftmost, never hidden behind "+N" while
+/// one fits), then the checked out branch, then the order of the user's branch colour rules
+/// (`master, main` before `develop` before `feature/*`), local before remote.
 pub(super) fn pills_for(
     idxs: &[usize],
     data: &RepoData,
@@ -113,16 +113,10 @@ pub(super) fn pills_for(
         let r = &data.refs[*i];
         let cur = r.kind == RefKind::Local && data.head_branch.as_deref() == Some(r.name.as_str());
         (
-            if cur { 0 } else { 1 },
-            match r.kind {
-                RefKind::Tag => usize::MAX,
-                _ => coloring.rank(r.branch_name()),
-            },
-            match r.kind {
-                RefKind::Local => 0,
-                RefKind::Remote => 1,
-                RefKind::Tag => 2,
-            },
+            r.kind != RefKind::Tag,
+            !cur,
+            coloring.rank(r.branch_name()),
+            r.kind == RefKind::Remote,
         )
     };
     order.sort_by_key(rank);
@@ -1449,23 +1443,23 @@ mod tests {
         assert_eq!(
             names(&data, &rules),
             [
+                "v1",
                 "master",
                 "develop",
                 "staging",
                 "feature/a",
-                "feature/b",
-                "v1"
+                "feature/b"
             ]
         );
         // The user's order counts: staging moved to the top.
         rules.swap(0, 2);
-        assert_eq!(names(&data, &rules)[..3], ["staging", "develop", "master"]);
-        // The checked out branch stays first.
+        assert_eq!(names(&data, &rules)[1..4], ["staging", "develop", "master"]);
+        // The checked out branch comes right after the tags.
         let data = RepoData {
             head_branch: Some("feature/a".into()),
             ..data
         };
-        assert_eq!(names(&data, &rules)[0], "feature/a");
+        assert_eq!(names(&data, &rules)[..2], ["v1", "feature/a"]);
     }
 
     #[test]
