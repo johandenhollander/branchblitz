@@ -19,6 +19,11 @@ impl BranchBlitz {
     }
 
     #[cfg(test)]
+    pub(crate) fn recent_mut(&mut self) -> &mut Vec<PathBuf> {
+        &mut self.settings.recent
+    }
+
+    #[cfg(test)]
     pub(crate) fn clear_status(&mut self) {
         self.status_line = None;
     }

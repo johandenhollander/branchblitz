@@ -780,7 +780,8 @@ impl BranchBlitz {
                 self.open_clone();
             }
             ui.add_space(20.0);
-            // Search the recent repositories; a path typed in (/ or ~) opens on Enter too.
+            // The most recent repositories; a search covers every one opened before. A path
+            // typed in (/ or ~) opens on Enter too.
             let query = self.recent_filter.trim().to_string();
             let needle = query.to_lowercase();
             let shown: Vec<PathBuf> = self
@@ -788,6 +789,7 @@ impl BranchBlitz {
                 .recent
                 .iter()
                 .filter(|p| p.display().to_string().to_lowercase().contains(&needle))
+                .take(super::RECENT_SHOWN)
                 .cloned()
                 .collect();
             let is_path = query.starts_with('/') || query.starts_with('~');
@@ -799,7 +801,7 @@ impl BranchBlitz {
                         ui,
                         pal,
                         &mut self.recent_filter,
-                        "Search recent repositories or enter a path",
+                        "Search opened repositories or enter a path",
                         None,
                     );
                     if std::mem::take(&mut self.focus_welcome) {
@@ -819,7 +821,7 @@ impl BranchBlitz {
             let hint = if is_path {
                 Some("Enter opens this path")
             } else {
-                (!query.is_empty() && shown.is_empty()).then_some("No recent repository matches")
+                (!query.is_empty() && shown.is_empty()).then_some("No opened repository matches")
             };
             if hint.is_some() || !shown.is_empty() {
                 ui.allocate_ui_with_layout(
@@ -831,7 +833,12 @@ impl BranchBlitz {
                             ui.add_space(12.0);
                         }
                         if !shown.is_empty() {
-                            ui.label(ds::caption("Recent", pal));
+                            let caption = if query.is_empty() {
+                                "Recent"
+                            } else {
+                                "Matches"
+                            };
+                            ui.label(ds::caption(caption, pal));
                             ui.add_space(4.0);
                         }
                         ui.spacing_mut().item_spacing.y = 0.0;

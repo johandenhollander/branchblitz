@@ -22,6 +22,10 @@ use crate::{ds, icons};
 const SETTINGS_KEY: &str = "branchblitz.settings";
 /// At most this many matches of a find in the whole history.
 pub const FIND_HISTORY_MAX: usize = 500;
+/// Repositories opened before, remembered for the welcome screen's search.
+const RECENT_KEEP: usize = 500;
+/// At most this many of them listed on the welcome screen, with or without a search.
+const RECENT_SHOWN: usize = 15;
 
 mod actions;
 mod agent_tools;
@@ -545,7 +549,7 @@ impl BranchBlitz {
         self.tabs.push(tab);
         self.settings.recent.retain(|p| p != &root);
         self.settings.recent.insert(0, root);
-        self.settings.recent.truncate(15);
+        self.settings.recent.truncate(RECENT_KEEP);
         if activate {
             let i = self.tabs.len() - 1;
             self.active = Some(i);

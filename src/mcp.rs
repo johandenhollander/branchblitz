@@ -3115,7 +3115,7 @@ mod tests {
         }
         call(&mut s, "type_text", json!({"text": "no-such-repository"}));
         let (_, w) = call(&mut s, "widgets", json!({}));
-        assert!(w.contains("No recent repository matches"), "{w}");
+        assert!(w.contains("No opened repository matches"), "{w}");
         let (err, out) = call(&mut s, "click", json!({"label": "Close New tab"}));
         assert!(!err, "{out}");
         assert!(active(&mut s));
@@ -3134,6 +3134,27 @@ mod tests {
         let st: Value =
             serde_json::from_str(&call(&mut s, "state", json!({"commits": 0})).1).unwrap();
         assert_eq!(st["tabs"][0]["active"], json!(true), "{st}");
+    }
+
+    /// The welcome screen lists the most recent repositories; its search covers all opened before.
+    #[test]
+    fn welcome_search_covers_every_opened_repository() {
+        let mut s = Server::default();
+        call(&mut s, "demo_repo", json!({}));
+        let h = s.session.as_mut().unwrap();
+        let recent = h.state_mut().recent_mut();
+        recent.extend((1..=30).map(|i| PathBuf::from(format!("/nonexistent/old/oldrepo-{i:02}"))));
+        call(&mut s, "click", json!({"label": "Open repository"}));
+        let (_, w) = call(&mut s, "widgets", json!({}));
+        assert!(w.contains("oldrepo-01"), "{w}");
+        assert!(
+            !w.contains("oldrepo-25"),
+            "only the most recent are listed: {w}"
+        );
+        call(&mut s, "type_text", json!({"text": "oldrepo-25"}));
+        let (_, w) = call(&mut s, "widgets", json!({}));
+        assert!(w.contains("oldrepo-25") && w.contains("MATCHES"), "{w}");
+        assert!(!w.contains("oldrepo-01"), "{w}");
     }
 
     /// A commit outside the loaded history has no row to put the field on: the dialog opens.
