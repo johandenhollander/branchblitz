@@ -99,6 +99,48 @@ impl Pill {
     }
 }
 
+/// Long-lived branches, in the order their chips go first when a commit has more refs than fit.
+const MAINLINES: [&str; 9] = [
+    "main",
+    "master",
+    "production",
+    "prod",
+    "staging",
+    "acceptance",
+    "test",
+    "develop",
+    "development",
+];
+
+/// Lower is more important: the remote's default branch, git-flow's master and develop, then
+/// the usual long-lived names; everything else (feature branches, tags) after them.
+fn mainline_rank(r: &crate::git::RefInfo, data: &RepoData) -> usize {
+    if r.kind == RefKind::Tag {
+        return usize::MAX;
+    }
+    let name = r.branch_name();
+    // By name, so a branch and its copies on all remotes rank alike and keep their order.
+    let default = data.remotes.iter().any(|rm| {
+        data.default_branches.iter().any(|d| {
+            d.strip_prefix(rm.as_str())
+                .and_then(|s| s.strip_prefix('/'))
+                == Some(name)
+        })
+    });
+    if default {
+        0
+    } else if data.flow.master.as_deref() == Some(name) {
+        1
+    } else if data.flow.develop.as_deref() == Some(name) {
+        2
+    } else {
+        MAINLINES
+            .iter()
+            .position(|m| *m == name)
+            .map_or(usize::MAX, |p| 3 + p)
+    }
+}
+
 pub(super) fn pills_for(idxs: &[usize], data: &RepoData) -> Vec<Pill> {
     let mut pills: Vec<Pill> = Vec::new();
     let mut order: Vec<usize> = idxs.to_vec();
@@ -107,6 +149,7 @@ pub(super) fn pills_for(idxs: &[usize], data: &RepoData) -> Vec<Pill> {
         let cur = r.kind == RefKind::Local && data.head_branch.as_deref() == Some(r.name.as_str());
         (
             if cur { 0 } else { 1 },
+            mainline_rank(r, data),
             match r.kind {
                 RefKind::Local => 0,
                 RefKind::Remote => 1,
@@ -1348,6 +1391,84 @@ pub(super) fn pill_menu(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mainline_branches_come_before_feature_branches() {
+        use crate::git::{RefInfo, RepoState};
+        let r = |name: &str, kind: RefKind| RefInfo {
+            name: name.into(),
+            full: String::new(),
+            kind,
+            target: "x".into(),
+            upstream: None,
+            ahead: 0,
+            behind: 0,
+            upstream_gone: false,
+            remote: (kind == RefKind::Remote).then(|| "origin".into()),
+        };
+        let data = RepoData {
+            worktrees: Default::default(),
+            limit: 0,
+            head_branch: Some("feature/layout".into()),
+            head_sha: None,
+            refs: vec![
+                r("feature/a", RefKind::Local),
+                r("origin/feature/b", RefKind::Remote),
+                r("origin/develop", RefKind::Remote),
+                r("origin/master", RefKind::Remote),
+                r("origin/staging", RefKind::Remote),
+                r("v1", RefKind::Tag),
+            ],
+            commits: vec![],
+            status: Default::default(),
+            state: RepoState::Clean,
+            stashes: vec![],
+            remotes: vec!["origin".into()],
+            head_history: Default::default(),
+            default_branches: vec![],
+            flow: Default::default(),
+            remote_tags: None,
+        };
+        let names = |data: &RepoData| -> Vec<String> {
+            pills_for(&[0, 1, 2, 3, 4, 5], data)
+                .into_iter()
+                .map(|p| p.text)
+                .collect()
+        };
+        assert_eq!(
+            names(&data),
+            [
+                "master",
+                "staging",
+                "develop",
+                "feature/a",
+                "feature/b",
+                "v1"
+            ]
+        );
+        // The remote's default branch goes first.
+        let data = RepoData {
+            default_branches: vec!["origin/develop".into()],
+            ..data
+        };
+        assert_eq!(names(&data)[0], "develop");
+        // git-flow's configured master goes before the usual names.
+        let data = RepoData {
+            default_branches: vec![],
+            flow: crate::git::GitFlow {
+                develop: Some("staging".into()),
+                ..Default::default()
+            },
+            ..data
+        };
+        assert_eq!(names(&data)[..2], ["staging", "master"]);
+        // The checked out branch stays first.
+        let data = RepoData {
+            head_branch: Some("feature/a".into()),
+            ..data
+        };
+        assert_eq!(names(&data)[0], "feature/a");
+    }
 
     #[test]
     fn author_and_date_widths_are_used_but_the_message_keeps_room() {
